@@ -7,6 +7,7 @@ import asyncio
 import hmac
 import logging
 import os
+import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -49,6 +50,13 @@ def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with db() as con:
         con.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS members (
+                chat_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                added REAL NOT NULL
+            )"""
+        )
         con.execute(
             """CREATE TABLE IF NOT EXISTS outages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,16 +102,29 @@ def fmt_dur(sec: float) -> str:
     return f"{s} sn"
 
 
-async def send(text: str) -> None:
+def recipients() -> list[int]:
+    """Bildirim alanlar: sahip + davetle katılan üyeler."""
+    with db() as con:
+        rows = con.execute("SELECT chat_id FROM members").fetchall()
+    return [TELEGRAM_CHAT_ID] + [r["chat_id"] for r in rows if r["chat_id"] != TELEGRAM_CHAT_ID]
+
+
+def is_member(chat_id: int) -> bool:
+    return chat_id in recipients()
+
+
+async def send(text: str, to: list[int] | None = None) -> None:
+    """Mesajı `to` listesine, verilmezse tüm alıcılara gönderir."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text})
-            r.raise_for_status()
-        log.info("Telegram'a gönderildi: %s", text.replace("\n", " | "))
-    except Exception as e:  # bildirim hatası servisi düşürmesin
-        # str(e) bot token'ı içeren URL'yi barındırır; yalnızca hata türünü yaz
-        log.error("Telegram gönderilemedi (%s)", type(e).__name__)
+    for chat_id in to if to is not None else recipients():
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(url, json={"chat_id": chat_id, "text": text})
+                r.raise_for_status()
+            log.info("Telegram'a gönderildi (%s): %s", chat_id, text.replace("\n", " | "))
+        except Exception as e:  # bildirim hatası servisi düşürmesin
+            # str(e) bot token'ı içeren URL'yi barındırabilir; yalnızca hata türünü yaz
+            log.error("Telegram gönderilemedi (%s, %s)", chat_id, type(e).__name__)
 
 
 def record_outage(kind: str, started: float, ended: float) -> None:
@@ -246,8 +267,8 @@ async def live_status() -> str:
     return f"🟢 Her şey yolunda (canlı ölçüm, {took:.1f} sn)\n{fmt_info(state['info'])}"
 
 
-async def reply_status() -> None:
-    await send(await live_status())
+async def reply_status(chat_id: int) -> None:
+    await send(await live_status(), to=[chat_id])
 
 
 def history_text() -> str:
@@ -264,6 +285,97 @@ def history_text() -> str:
     return "Son kesintiler:\n" + "\n".join(lines)
 
 
+INVITE_TTL = 600
+invites: dict[str, float] = {}        # davet kodu -> son geçerlilik zamanı
+bad_attempts: list[float] = []        # hatalı /katil denemeleri (kaba kuvveti sınırlamak için)
+
+HELP_MEMBER = "/durum – canlı durum\n/gecmis – son kesintiler\n/ayril – bildirimlerden çık"
+HELP_OWNER = HELP_MEMBER + "\n/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar"
+
+
+def spawn(coro) -> None:
+    t = asyncio.create_task(coro)      # polling'i bloklamasın
+    background_tasks.add(t)
+    t.add_done_callback(background_tasks.discard)
+
+
+def member_name(msg: dict) -> str:
+    u = msg.get("from", {})
+    return (u.get("first_name") or u.get("username") or "Üye")[:40]
+
+
+async def handle_join(chat_id: int, msg: dict, arg: str) -> None:
+    now = time.time()
+    bad_attempts[:] = [t for t in bad_attempts if now - t < INVITE_TTL]
+    if len(bad_attempts) >= 10:
+        return                                         # çok fazla hatalı deneme: sessizce yoksay
+    if is_member(chat_id):
+        await send("Zaten üyesin. Komutlar için /yardim", to=[chat_id])
+        return
+    code = arg.strip().upper()
+    if invites.get(code, 0) < now:
+        bad_attempts.append(now)
+        await send("Kod geçersiz ya da süresi dolmuş.", to=[chat_id])
+        return
+    del invites[code]                                  # tek kullanımlık
+    name = member_name(msg)
+    with db() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO members (chat_id, name, added) VALUES (?, ?, ?)",
+            (chat_id, name, now),
+        )
+    await send(f"✅ Katıldın! Artık elektrik/internet kesintilerinden haberdar olacaksın.\n\n{HELP_MEMBER}", to=[chat_id])
+    await send(f"👤 {name} bildirimlere katıldı.", to=[TELEGRAM_CHAT_ID])
+
+
+async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
+    owner = chat_id == TELEGRAM_CHAT_ID
+    if cmd == "/katil":
+        await handle_join(chat_id, msg, arg)
+        return
+    if not is_member(chat_id):
+        await send("Bu bot özeldir. Davet kodun varsa: /katil KOD", to=[chat_id])
+        return
+    if cmd in ("/durum", "/start"):
+        spawn(reply_status(chat_id))
+    elif cmd in ("/gecmis", "/geçmiş"):
+        await send(history_text(), to=[chat_id])
+    elif cmd in ("/yardim", "/yardım", "/help"):
+        await send(HELP_OWNER if owner else HELP_MEMBER, to=[chat_id])
+    elif cmd == "/ayril" and not owner:
+        with db() as con:
+            con.execute("DELETE FROM members WHERE chat_id = ?", (chat_id,))
+        await send("Bildirimlerden çıktın. Tekrar katılmak için yeni bir davet kodu gerekir.", to=[chat_id])
+        await send(f"👤 {member_name(msg)} bildirimlerden ayrıldı.", to=[TELEGRAM_CHAT_ID])
+    elif owner and cmd == "/davet":
+        now = time.time()
+        for k in [k for k, v in invites.items() if v < now]:
+            del invites[k]
+        code = secrets.token_hex(3).upper()
+        invites[code] = now + INVITE_TTL
+        await send(
+            "Katılacak kişiye şunu ilet:\n"
+            "1) Telegram'da @evnobetcisi_bot'u aç\n"
+            f"2) Şunu yaz: /katil {code}\n\n"
+            f"Kod {INVITE_TTL // 60} dakika geçerli ve tek kullanımlık.",
+            to=[chat_id],
+        )
+    elif owner and cmd == "/uyeler":
+        with db() as con:
+            rows = con.execute("SELECT chat_id, name FROM members ORDER BY added").fetchall()
+        lines = ["👑 Sen (sahip)"] + [f"👤 {r['name']} — ID {r['chat_id']}" for r in rows]
+        await send("\n".join(lines), to=[chat_id])
+    elif owner and cmd == "/cikar":
+        try:
+            target = int(arg.strip())
+        except ValueError:
+            await send("Kullanım: /cikar ID (ID'yi /uyeler gösterir)", to=[chat_id])
+            return
+        with db() as con:
+            n = con.execute("DELETE FROM members WHERE chat_id = ?", (target,)).rowcount
+        await send("Üye çıkarıldı." if n else "Böyle bir üye yok.", to=[chat_id])
+
+
 async def telegram_loop() -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     offset = 0
@@ -275,17 +387,15 @@ async def telegram_loop() -> None:
             for upd in data.get("result", []):
                 offset = upd["update_id"] + 1
                 msg = upd.get("message") or {}
-                if msg.get("chat", {}).get("id") != TELEGRAM_CHAT_ID:
+                chat = msg.get("chat", {})
+                text = (msg.get("text") or "").strip()
+                if chat.get("type") != "private" or not text.startswith("/"):
                     continue
-                cmd = (msg.get("text") or "").split()[0].split("@")[0] if msg.get("text") else ""
-                if cmd in ("/durum", "/start"):
-                    t = asyncio.create_task(reply_status())   # polling'i bloklamasın
-                    background_tasks.add(t)
-                    t.add_done_callback(background_tasks.discard)
-                elif cmd in ("/gecmis", "/geçmiş"):
-                    await send(history_text())
+                head, _, arg = text.partition(" ")
+                await handle_command(chat["id"], msg, head.split("@")[0].lower(), arg)
         except Exception as e:
-            log.error("Telegram polling hatası: %s", e)
+            # str(e) bot token'ı içeren URL'yi barındırabilir; yalnızca hata türünü yaz
+            log.error("Telegram polling hatası (%s)", type(e).__name__)
             await asyncio.sleep(5)
 
 

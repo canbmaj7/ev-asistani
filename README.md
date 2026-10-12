@@ -11,6 +11,9 @@ Raspberry Pi ──(30 sn'de bir nabız)──▶ sunucu (Docker) ──▶ Tele
 - **Telegram komutları:**
   - `/durum`: Pi'ye **anında** ölçüm yaptırıp canlı sonucu yazar (internet gecikmesi, CPU sıcaklığı, Wi-Fi sinyali, boş RAM, açık kalma süresi). Pi yanıt vermezse bunu da söyler.
   - `/gecmis`: son 10 kesinti.
+  - `/davet` (sahip): tek kullanımlık, 10 dakika geçerli kod üretir. Başkası bota `/katil KOD` yazınca bildirimlere dahil olur.
+  - `/uyeler`, `/cikar ID` (sahip), `/ayril` (üye), `/yardim`.
+- **Çoklu kullanıcı:** Sahip `TELEGRAM_CHAT_ID` ile belirlenir; üyeler SQLite'ta tutulur. Alarm herkese gider, `/durum` yanıtı yalnızca soran kişiye.
 - **Canlı kanal:** Pi, sunucuya uzun bekleme (`POST /wait`) bağlantısı açık tutar; `/durum` gelince sunucu bu kanaldan Pi'yi uyandırır. Pi dışarıya bağlandığı için modemde port açmak gerekmez.
 
 Kurulum için [`docs/KURULUM.md`](docs/KURULUM.md).
