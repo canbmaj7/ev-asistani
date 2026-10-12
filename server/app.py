@@ -1,10 +1,12 @@
-"""Nöbetçi sunucu servisi.
+"""Ev Nöbetçisi sunucu servisi.
 
-Pi'den gelen nabızları (heartbeat) izler. Nabız kesilirse Telegram'a haber verir,
-geri gelince kesintinin türünü (elektrik / internet) ve süresini bildirir.
+- Pi'den gelen nabızları izler; kesintiyi (elektrik / internet) ve süresini Telegram'a bildirir.
+- Her sabah hava, kur, takvim, deprem, ev ve sunucu özetini gönderir.
+- Türkiye'de deprem olunca anında haber verir.
 """
 import asyncio
 import hmac
+import json
 import logging
 import os
 import re
@@ -17,6 +19,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
+
+import ozet
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -30,6 +34,11 @@ DB_PATH = os.getenv("DB_PATH", "/data/nobetci.db")
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Istanbul"))
 PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")      # boşsa web paneli kapalı
 ONLINE_SEC = 900                                      # cihaz bu süre içinde görüldüyse "çevrimiçi"
+SEND_AT = os.getenv("SEND_AT", "08:00")               # sabah özeti saati
+SUMMARY_CATCHUP_H = 2                                 # geç açılışta en fazla bu kadar saat telafi
+CALENDAR_ICS = os.getenv("CALENDAR_ICS", "")          # Google Takvim gizli iCal adresi (isteğe bağlı)
+WATCH_URLS = [u.strip() for u in os.getenv("WATCH_URLS", "").split(",") if u.strip()]
+QUAKE_POLL_SEC = int(os.getenv("QUAKE_POLL_SEC", "60"))
 
 log = logging.getLogger("nobetci")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -398,6 +407,105 @@ async def monitor_loop() -> None:
             )
 
 
+# ---------- Sabah özeti ----------
+def kv_json(k: str, default):
+    try:
+        return json.loads(kv_get(k) or "null") or default
+    except json.JSONDecodeError:
+        return default
+
+
+def home_section() -> str:
+    """Özetteki 🏠 Ev bölümü: Pi'nin durumu ve son 24 saatin kesintileri."""
+    lines = ["🏠 Ev"]
+    if not state["last_beat"]:
+        lines.append("Pi'den henüz sinyal yok.")
+    elif state["down_since"] is not None:
+        lines.append(f"🔴 Pi'ye ulaşılamıyor ({fmt_time(state['down_since'])[:16]}'den beri)")
+    else:
+        info = state["info"]
+        bits = ["🟢 Pi çevrimiçi"]
+        if info.get("wifi_dbm") is not None:
+            bits.append(f"Wi-Fi {info['wifi_dbm']} dBm")
+        if info.get("temp") is not None:
+            bits.append(f"{info['temp']}°C")
+        lines.append(" · ".join(bits))
+    st = outage_stats(1)
+    if st["kinds"]:
+        parts = [f"{'⚡' if k == 'elektrik' else '🌐'} {v['n']} ({fmt_dur(v['sec'])})" for k, v in st["kinds"].items()]
+        lines.append("Son 24 saat kesinti: " + ", ".join(parts))
+    else:
+        lines.append("Son 24 saatte kesinti yok.")
+    return "\n".join(lines)
+
+
+async def summary_text(full: bool) -> str:
+    """full=True: sahip için (sunucu dahil); False: üyeler için."""
+    st = kv_json("ozet_state", {})
+    text = await ozet.build_summary(st, CALENDAR_ICS if full else "", WATCH_URLS,
+                                    include_server=full, extra=home_section())
+    kv_set("ozet_state", json.dumps(st))  # kur geçmişi
+    return text
+
+
+def summary_due(now: datetime, last_sent: str | None) -> bool:
+    hh, mm = map(int, SEND_AT.split(":"))
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    return last_sent != now.date().isoformat() and target <= now < target + timedelta(hours=SUMMARY_CATCHUP_H)
+
+
+async def summary_loop() -> None:
+    while True:
+        now = datetime.now(TZ)
+        if summary_due(now, kv_get("summary_last_sent")):
+            kv_set("summary_last_sent", now.date().isoformat())
+            try:
+                await send(await summary_text(full=True), to=[TELEGRAM_CHAT_ID])
+            except Exception as e:
+                log.error("Sabah özeti hazırlanamadı (%s)", type(e).__name__)
+        await asyncio.sleep(20)
+
+
+# ---------- Deprem ----------
+async def fetch_quakes(hours: float) -> list[dict]:
+    async with httpx.AsyncClient(timeout=25, headers={"User-Agent": "ev-nobetcisi/1.0"}) as c:
+        return await ozet.quakes(c, hours=hours)
+
+
+async def quake_loop() -> None:
+    """Türkiye'de yeni deprem olunca herkese haber verir. İlk turda mevcutlar sessizce kaydedilir."""
+    first = kv_get("seen_quakes") is None
+    seen = set(kv_json("seen_quakes", []))
+    while True:
+        try:
+            qs = await fetch_quakes(6)
+            new = [e for e in reversed(qs) if e["eventID"] not in seen]   # eskiden yeniye
+            for e in new:
+                seen.add(e["eventID"])
+                if not first:
+                    await send(ozet.quake_alert(e))
+            if new or first:
+                kv_set("seen_quakes", json.dumps(sorted(seen, key=int)[-500:]))
+            first = False
+        except Exception as e:
+            log.error("Deprem sorgusu başarısız (%s)", type(e).__name__)
+        await asyncio.sleep(QUAKE_POLL_SEC)
+
+
+async def reply_quakes(chat_id: int) -> None:
+    try:
+        await send(ozet.quakes_section(await fetch_quakes(24)), to=[chat_id])
+    except Exception as e:
+        await send(f"Deprem verisi alınamadı ({type(e).__name__}).", to=[chat_id])
+
+
+async def reply_summary(chat_id: int) -> None:
+    try:
+        await send(await summary_text(full=chat_id == TELEGRAM_CHAT_ID), to=[chat_id])
+    except Exception as e:
+        await send(f"Özet hazırlanamadı ({type(e).__name__}).", to=[chat_id])
+
+
 # ---------- Telegram komutları ----------
 def fmt_info(info: dict) -> str:
     lines = []
@@ -470,9 +578,14 @@ INVITE_TTL = 600
 invites: dict[str, float] = {}        # davet kodu -> son geçerlilik zamanı
 bad_attempts: list[float] = []        # hatalı /katil denemeleri (kaba kuvveti sınırlamak için)
 
-HELP_MEMBER = "/durum – canlı durum\n/gecmis – son kesintiler\n/rapor – 7 ve 30 günlük istatistik\n/ayril – bildirimlerden çık"
+HELP_MEMBER = (
+    "/durum – evin canlı durumu\n/ozet – günlük özet (hava, kur, deprem)\n/deprem – son 24 saatin depremleri\n"
+    "/gecmis – son kesintiler\n/rapor – 7 ve 30 günlük istatistik\n/ayril – bildirimlerden çık\n\n"
+    "Türkiye'de deprem olunca otomatik haber veririm."
+)
 HELP_OWNER = (
-    "/durum – canlı durum\n/gecmis – son kesintiler\n/rapor [gün] – kesinti istatistiği\n"
+    f"/durum – evin canlı durumu\n/ozet – sabah özetini şimdi gönder (her gün {SEND_AT}'de otomatik)\n"
+    "/deprem – son 24 saatin depremleri\n/gecmis – son kesintiler\n/rapor [gün] – kesinti istatistiği\n"
     "/esik [dk] – alarm eşiği (şimdi/değiştir)\n/cihazlar – ağdaki cihazlar\n/cihaz SON4 isim – cihaza isim ver\n"
     "/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar"
 )
@@ -525,6 +638,11 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         spawn(reply_status(chat_id))
     elif cmd in ("/gecmis", "/geçmiş"):
         await send(history_text(), to=[chat_id])
+    elif cmd == "/ozet":
+        await send("⏳ Özet hazırlanıyor…", to=[chat_id])
+        spawn(reply_summary(chat_id))
+    elif cmd == "/deprem":
+        spawn(reply_quakes(chat_id))
     elif cmd == "/rapor":
         try:
             days = int(arg.strip())
@@ -587,6 +705,8 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
 
 MEMBER_COMMANDS = [
     {"command": "durum", "description": "Canlı durum: internet, sıcaklık, Wi-Fi"},
+    {"command": "ozet", "description": "Günlük özet: hava, kur, takvim, deprem"},
+    {"command": "deprem", "description": "Son 24 saatin depremleri"},
     {"command": "gecmis", "description": "Son kesintiler"},
     {"command": "rapor", "description": "7 ve 30 günlük kesinti istatistiği"},
     {"command": "yardim", "description": "Komut listesi"},
@@ -648,8 +768,10 @@ async def lifespan(app: FastAPI):
     init_db()
     load_state()
     await set_commands()
-    tasks = [asyncio.create_task(monitor_loop()), asyncio.create_task(telegram_loop())]
-    log.info("Nöbetçi başladı (eşik %s sn, panel %s)", timeout_sec(), "açık" if PANEL_PASSWORD else "kapalı")
+    tasks = [asyncio.create_task(f()) for f in (monitor_loop, telegram_loop, summary_loop, quake_loop)]
+    log.info("Nöbetçi başladı (eşik %s sn, panel %s, özet %s, takvim %s, %d site, deprem M%s)", timeout_sec(),
+             "açık" if PANEL_PASSWORD else "kapalı", SEND_AT, "açık" if CALENDAR_ICS else "kapalı",
+             len(WATCH_URLS), ozet.QUAKE_MIN_MAG)
     yield
     for t in tasks:
         t.cancel()

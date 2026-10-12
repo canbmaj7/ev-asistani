@@ -9,6 +9,14 @@ services:
       BEAT_TOKEN: ${BEAT_TOKEN}
       TIMEOUT_SEC: ${TIMEOUT_SEC:-120}
       PANEL_PASSWORD: ${PANEL_PASSWORD:-}
+      # Sabah özeti ve deprem
+      SEND_AT: ${SEND_AT:-08:00}
+      CITY: ${CITY:-Gebze}
+      LAT: ${LAT:-40.8028}
+      LON: ${LON:-29.4307}
+      CALENDAR_ICS: ${CALENDAR_ICS:-}
+      WATCH_URLS: ${WATCH_URLS:-}
+      QUAKE_MIN_MAG: ${QUAKE_MIN_MAG:-4.0}
     volumes:
       - nobetci-data:/data
     networks:

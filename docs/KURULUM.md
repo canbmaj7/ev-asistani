@@ -16,6 +16,8 @@ HTTPS için bir alan adı gerekir (kendi alan adın ya da ücretsiz `nobetci.<SU
 
 Coolify kullanıyorsan: *New Resource → Public Repository*, build pack **Dockerfile**, base directory `/server`, port `8000`, alan adını Domains'e yaz; ortam değişkenlerini Coolify'a gir ve `/data` için kalıcı depolama ekle.
 
+Sabah özeti için `SEND_AT` (08:00), `CITY`/`LAT`/`LON`, isteğe bağlı `CALENDAR_ICS` (Google Takvim → Ayarlar → takvim → *iCal biçiminde gizli adres*) ve `WATCH_URLS` (virgülle ayrılmış site adresleri) tanımlanır. Deprem eşiği `QUAKE_MIN_MAG` (4.0).
+
 Web paneli için `PANEL_PASSWORD` ortam değişkenini tanımla (boşsa panel kapalı kalır). Alarm eşiği başlangıç değeri `TIMEOUT_SEC` (varsayılan 120 sn), sonradan `/esik` ile değişir.
 
 ## 3. Pi (Raspberry Pi 3)
