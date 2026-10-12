@@ -29,7 +29,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logging.getLogger("httpx").setLevel(logging.WARNING)  # URL'de bot token'ı var, günlüğe yazılmasın
 
 STARTED_AT = time.time()
-state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None}
+state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None, "info": {}}
+LIVE_TIMEOUT = int(os.getenv("LIVE_TIMEOUT", "15"))   # /durum canlı yanıt bekleme süresi (sn)
+WAIT_SEC = 25                                          # Pi'nin uzun bekleme (long-poll) süresi
+
+ping_event = asyncio.Event()       # /durum istendi: Pi'ye "şimdi ölç" sinyali
+live_waiters: list = []            # canlı yanıtı bekleyen /durum istekleri
+background_tasks: set = set()
 
 
 # ---------- Veritabanı ----------
@@ -117,6 +123,8 @@ class Beat(BaseModel):
     boot_id: str
     uptime: float = 0
     net_events: list[NetEvent] = []
+    live: bool = False          # /durum isteğine verilen canlı yanıt
+    info: dict = {}             # sıcaklık, Wi-Fi, gecikme vb.
 
 
 async def handle_beat(b: Beat) -> None:
@@ -159,6 +167,13 @@ async def handle_beat(b: Beat) -> None:
         )
 
     state.update(last_beat=now, boot_id=b.boot_id, device=b.device, down_since=None)
+    if b.info:
+        state["info"] = {**b.info, "uptime": b.uptime}
+    if b.live:
+        for f in live_waiters:
+            if not f.done():
+                f.set_result(True)
+        live_waiters.clear()
     kv_set("last_beat", now)
     kv_set("boot_id", b.boot_id)
     kv_set("device", b.device)
@@ -185,7 +200,23 @@ async def monitor_loop() -> None:
 
 
 # ---------- Telegram komutları ----------
-def status_text() -> str:
+def fmt_info(info: dict) -> str:
+    lines = []
+    if "latency_ms" in info:
+        lines.append(f"🌐 İnternet: var ({info['latency_ms']} ms)" if info["latency_ms"] is not None else "🌐 İnternet: YOK")
+    if info.get("uptime") is not None:
+        lines.append(f"⏱ Pi açık kalma süresi: {fmt_dur(info['uptime'])}")
+    if "temp" in info:
+        lines.append(f"🌡 CPU: {info['temp']}°C · yük {info.get('load', '?')}")
+    if "mem_mb" in info:
+        lines.append(f"💾 Boş RAM: {info['mem_mb']} MB")
+    if info.get("wifi_dbm") is not None:
+        lines.append(f"📶 Wi-Fi sinyali: {info['wifi_dbm']} dBm")
+    return "\n".join(lines)
+
+
+async def live_status() -> str:
+    """Pi'ye anlık ölçüm yaptırıp sonucu döndürür."""
     if not state["last_beat"]:
         return "Henüz hiç nabız alınmadı."
     ago = time.time() - state["last_beat"]
@@ -194,7 +225,27 @@ def status_text() -> str:
             f"🔴 Bağlantı yok\nSon sinyal: {fmt_time(state['last_beat'])} "
             f"({fmt_dur(ago)} önce)"
         )
-    return f"🟢 Her şey yolunda\nSon sinyal: {fmt_dur(ago)} önce"
+    fut = asyncio.get_running_loop().create_future()
+    live_waiters.append(fut)
+    ping_event.set()
+    t0 = time.time()
+    try:
+        await asyncio.wait_for(fut, LIVE_TIMEOUT)
+    except asyncio.TimeoutError:
+        if fut in live_waiters:
+            live_waiters.remove(fut)
+        ping_event.clear()
+        return (
+            f"🟠 Pi canlı kontrole {LIVE_TIMEOUT} sn içinde yanıt vermedi.\n"
+            f"Son sinyal {fmt_dur(time.time() - state['last_beat'])} önce geldi; "
+            "bağlantı yavaş ya da kesilmek üzere olabilir."
+        )
+    took = time.time() - t0
+    return f"🟢 Her şey yolunda (canlı ölçüm, {took:.1f} sn)\n{fmt_info(state['info'])}"
+
+
+async def reply_status() -> None:
+    await send(await live_status())
 
 
 def history_text() -> str:
@@ -226,7 +277,9 @@ async def telegram_loop() -> None:
                     continue
                 cmd = (msg.get("text") or "").split()[0].split("@")[0] if msg.get("text") else ""
                 if cmd in ("/durum", "/start"):
-                    await send(status_text())
+                    t = asyncio.create_task(reply_status())   # polling'i bloklamasın
+                    background_tasks.add(t)
+                    t.add_done_callback(background_tasks.discard)
                 elif cmd in ("/gecmis", "/geçmiş"):
                     await send(history_text())
         except Exception as e:
@@ -255,6 +308,19 @@ async def beat(b: Beat, x_token: str = Header(default="")):
         raise HTTPException(status_code=401, detail="yetkisiz")
     await handle_beat(b)
     return {"ok": True}
+
+
+@app.post("/wait")
+async def wait(x_token: str = Header(default="")):
+    """Pi'nin uzun bekleme kanalı: /durum istenince hemen {"ping": true} döner."""
+    if not hmac.compare_digest(x_token, BEAT_TOKEN):
+        raise HTTPException(status_code=401, detail="yetkisiz")
+    try:
+        await asyncio.wait_for(ping_event.wait(), WAIT_SEC)
+    except asyncio.TimeoutError:
+        return {"ping": False}
+    ping_event.clear()
+    return {"ping": True}
 
 
 @app.get("/health")

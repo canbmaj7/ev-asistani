@@ -8,7 +8,10 @@ Raspberry Pi ──(30 sn'de bir nabız)──▶ sunucu (Docker) ──▶ Tele
 
 - **Pi ajanı** (`pi/`): sunucuya düzenli nabız yollar, interneti 3 bağımsız hedefe bağlanarak kendisi de ölçer. Yalnızca Python standart kütüphanesi.
 - **Sunucu** (`server/`): FastAPI + SQLite. Nabız kesilince uyarır; geri gelince kesintinin **elektrik mi internet mi** olduğunu (Pi'nin `boot_id` değişimine bakarak) ve süresini bildirir.
-- **Telegram komutları:** `/durum`, `/gecmis`.
+- **Telegram komutları:**
+  - `/durum`: Pi'ye **anında** ölçüm yaptırıp canlı sonucu yazar (internet gecikmesi, CPU sıcaklığı, Wi-Fi sinyali, boş RAM, açık kalma süresi). Pi yanıt vermezse bunu da söyler.
+  - `/gecmis`: son 10 kesinti.
+- **Canlı kanal:** Pi, sunucuya uzun bekleme (`POST /wait`) bağlantısı açık tutar; `/durum` gelince sunucu bu kanaldan Pi'yi uyandırır. Pi dışarıya bağlandığı için modemde port açmak gerekmez.
 
 Kurulum için [`docs/KURULUM.md`](docs/KURULUM.md).
 
