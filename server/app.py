@@ -100,8 +100,10 @@ async def send(text: str) -> None:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text})
             r.raise_for_status()
+        log.info("Telegram'a gönderildi: %s", text.replace("\n", " | "))
     except Exception as e:  # bildirim hatası servisi düşürmesin
-        log.error("Telegram gönderilemedi: %s", e)
+        # str(e) bot token'ı içeren URL'yi barındırır; yalnızca hata türünü yaz
+        log.error("Telegram gönderilemedi (%s)", type(e).__name__)
 
 
 def record_outage(kind: str, started: float, ended: float) -> None:
