@@ -376,6 +376,36 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         await send("Üye çıkarıldı." if n else "Böyle bir üye yok.", to=[chat_id])
 
 
+MEMBER_COMMANDS = [
+    {"command": "durum", "description": "Canlı durum: internet, sıcaklık, Wi-Fi"},
+    {"command": "gecmis", "description": "Son kesintiler"},
+    {"command": "yardim", "description": "Komut listesi"},
+    {"command": "katil", "description": "Davet koduyla bildirimlere katıl"},
+    {"command": "ayril", "description": "Bildirimlerden çık"},
+]
+OWNER_COMMANDS = [
+    c for c in MEMBER_COMMANDS if c["command"] not in ("katil", "ayril")
+] + [
+    {"command": "davet", "description": "Yeni üye için davet kodu üret"},
+    {"command": "uyeler", "description": "Üyeleri listele"},
+    {"command": "cikar", "description": "Üyeyi çıkar: /cikar ID"},
+]
+
+
+async def set_commands() -> None:
+    """`/` yazınca çıkan komut menüsü: üyeler ve sahip için ayrı liste."""
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setMyCommands"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            await c.post(base, json={"commands": MEMBER_COMMANDS})
+            await c.post(base, json={
+                "commands": OWNER_COMMANDS,
+                "scope": {"type": "chat", "chat_id": TELEGRAM_CHAT_ID},
+            })
+    except Exception as e:
+        log.error("Komut menüsü ayarlanamadı (%s)", type(e).__name__)
+
+
 async def telegram_loop() -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     offset = 0
@@ -404,6 +434,7 @@ async def telegram_loop() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     load_state()
+    await set_commands()
     tasks = [asyncio.create_task(monitor_loop()), asyncio.create_task(telegram_loop())]
     log.info("Nöbetçi başladı (eşik %s sn)", TIMEOUT_SEC)
     yield
