@@ -8,6 +8,7 @@
 - Sunucu çökerse (Pi ve internet sağlamken) Telegram'dan doğrudan haber verir.
 - Ağdaki cihazları periyodik tarar, sonucu sunucuya iletir.
 - systemd watchdog'a "yaşıyorum" der; ajan donarsa systemd yeniden başlatır.
+- Her gece (NOBETCI_SPEEDTEST_AT, varsayılan 03:30) ve sunucu isteyince internet hız testi yapar.
 
 Yalnızca standart kütüphane.
 """
@@ -40,6 +41,10 @@ TG_TOKEN = os.getenv("NOBETCI_TG_TOKEN", "")
 TG_CHAT = os.getenv("NOBETCI_TG_CHAT", "")
 SERVER_ALERT_AFTER = 300                 # sunucu bu kadar sn yanıtsızsa uyar (dağıtım ~2 dk sürer)
 
+# Hız testi (Cloudflare uç noktaları, ek yazılım gerekmez)
+SPEEDTEST_AT = os.getenv("NOBETCI_SPEEDTEST_AT", "03:30")
+SPEED_HOST = "speed.cloudflare.com"
+
 # Ağ taraması
 SCAN_EVERY = int(os.getenv("NOBETCI_SCAN_EVERY", "300"))
 SCAN_ENABLED = os.getenv("NOBETCI_SCAN", "1") == "1"
@@ -52,6 +57,9 @@ server_fail_since = None
 server_alert_sent = False
 pending_devices = None  # son tarama sonucu; bir sonraki nabızla gider
 hostnames = {}          # ip -> ters DNS adı (tekrar sorgulamamak için)
+pending_speedtest = None  # son hız testi sonucu; bir sonraki nabızla gider
+last_speedtest_day = None
+speed_lock = threading.Lock()
 lock = threading.Lock()
 dev_lock = threading.Lock()
 
@@ -245,6 +253,70 @@ def scan_loop() -> None:
         time.sleep(SCAN_EVERY)
 
 
+# ---------- Hız testi ----------
+def measure_ping() -> float | None:
+    times = []
+    for _ in range(5):
+        t0 = time.monotonic()
+        try:
+            with socket.create_connection((SPEED_HOST, 443), timeout=3):
+                times.append((time.monotonic() - t0) * 1000)
+        except OSError:
+            pass
+    return round(sorted(times)[len(times) // 2], 1) if times else None
+
+
+def measure_download(nbytes: int = 25_000_000, limit: float = 25) -> float:
+    req = urllib.request.Request(f"https://{SPEED_HOST}/__down?bytes={nbytes}", headers={"User-Agent": "ev-asistani-pi"})
+    t0, got = time.monotonic(), 0
+    with urllib.request.urlopen(req, timeout=15) as r:
+        while chunk := r.read(65536):
+            got += len(chunk)
+            if time.monotonic() - t0 > limit:
+                break
+    return round(got * 8 / (time.monotonic() - t0) / 1e6, 2)
+
+
+def measure_upload(nbytes: int = 5_000_000) -> float:
+    req = urllib.request.Request(f"https://{SPEED_HOST}/__up", data=b"0" * nbytes, method="POST",
+                                 headers={"User-Agent": "ev-asistani-pi", "Content-Type": "application/octet-stream"})
+    t0 = time.monotonic()
+    urllib.request.urlopen(req, timeout=90).read()
+    return round(nbytes * 8 / (time.monotonic() - t0) / 1e6, 2)
+
+
+def run_speedtest(trigger: str) -> dict:
+    """Aynı anda tek test; her ölçüm ayrı ayrı başarısız olabilir."""
+    with speed_lock:
+        result = {"trigger": trigger, "ping_ms": measure_ping()}
+        for key, fn in (("down_mbps", measure_download), ("up_mbps", measure_upload)):
+            try:
+                result[key] = fn()
+            except Exception as e:
+                log(f"hız testi ({key}) başarısız: {type(e).__name__}")
+                result[key] = None
+    log(f"hız testi: {result}")
+    return result
+
+
+def nightly_speedtest() -> None:
+    """Saat SPEEDTEST_AT'i geçtiyse ve bugün yapılmadıysa (2 saatlik pencerede) arka planda ölç."""
+    global last_speedtest_day
+    now = time.localtime()
+    hh, mm = map(int, SPEEDTEST_AT.split(":"))
+    minutes = now.tm_hour * 60 + now.tm_min
+    if last_speedtest_day == now.tm_yday or not (hh * 60 + mm <= minutes < hh * 60 + mm + 120):
+        return
+    last_speedtest_day = now.tm_yday
+
+    def job():
+        global pending_speedtest
+        r = run_speedtest("gece")
+        with dev_lock:
+            pending_speedtest = r
+    threading.Thread(target=job, daemon=True).start()
+
+
 # ---------- Nabız ----------
 def collect_info(fresh: bool) -> dict:
     """Pi'nin anlık durumu. fresh=True ise interneti de yeniden ölçer."""
@@ -285,13 +357,14 @@ def post(url: str, body: dict, timeout: float) -> dict:
     return json.loads(urllib.request.urlopen(req, timeout=timeout).read() or b"{}")
 
 
-def beat(live: bool = False) -> None:
-    global pending_devices
+def beat(live: bool = False, speedtest: dict | None = None) -> None:
+    global pending_devices, pending_speedtest
     with lock:
         now = time.monotonic()
         pending = list(net_events)
         with dev_lock:
             devices = pending_devices
+            nightly = pending_speedtest if speedtest is None else None
         post(
             URL,
             {
@@ -304,6 +377,7 @@ def beat(live: bool = False) -> None:
                 "live": live,
                 "info": collect_info(fresh=live),
                 "devices": devices,
+                "speedtest": speedtest or nightly,
             },
             timeout=10,
         )
@@ -311,14 +385,20 @@ def beat(live: bool = False) -> None:
         with dev_lock:
             if pending_devices is devices:
                 pending_devices = None
+            if nightly is not None and pending_speedtest is nightly:
+                pending_speedtest = None
 
 
 def listen() -> None:
     """Sunucudan "şimdi ölç" isteğini bekler; gelince anında canlı nabız yollar."""
     while True:
         try:
-            if post(WAIT_URL, {}, timeout=40).get("ping"):
-                beat(live=True)
+            resp = post(WAIT_URL, {}, timeout=40)
+            if resp.get("ping"):
+                if resp.get("cmd") == "speedtest":
+                    beat(live=True, speedtest=run_speedtest("elle"))
+                else:
+                    beat(live=True)
         except Exception as e:
             log(f"dinleme hatası: {type(e).__name__}")
             time.sleep(5)
@@ -334,6 +414,7 @@ def main() -> None:
         sd_notify("WATCHDOG=1")
         check_internet()
         maybe_reconnect_wifi()
+        nightly_speedtest()
         if time.monotonic() - last_beat >= BEAT_EVERY:
             try:
                 beat()

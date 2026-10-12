@@ -36,6 +36,6 @@ async def loop() -> None:
 
 async def reply(chat_id: int) -> None:
     try:
-        await tg.send(afad.section(await fetch(24)), to=[chat_id])
+        await tg.send(afad.section(await fetch(24)) + "\n🔗 Kaynak: https://deprem.afad.gov.tr/last-earthquakes", to=[chat_id])
     except Exception as e:
         await tg.send(f"Deprem verisi alınamadı ({type(e).__name__}).", to=[chat_id])

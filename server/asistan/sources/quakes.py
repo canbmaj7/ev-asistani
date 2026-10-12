@@ -57,6 +57,7 @@ def alert(e: dict) -> str:
         f"🕐 {e['when'].strftime('%d.%m %H:%M:%S')} · derinlik {tr_num(float(e.get('depth') or 0), 1)} km",
         f"📏 {config.CITY}'ye ~{round(e['dist'])} km",
         f"🗺 https://maps.google.com/?q={e['lat']},{e['lon']}",
+        f"🔗 Kaynak: https://deprem.afad.gov.tr/event-detail/{e.get('eventID', '')}",
     ]
     if e["dist"] < 100:
         lines.insert(1, f"⚠️ {config.CITY}'ye yakın!")

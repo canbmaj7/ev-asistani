@@ -35,6 +35,11 @@ def fake_sources(monkeypatch):
     monkeypatch.setattr(server, "section", s)
     monkeypatch.setattr(cal_src, "section", cal)
 
+    async def aq(c): return "🌫 Hava kalitesi: İyi"
+    async def ezan(): return "🕌 İmsak 05:40"
+    monkeypatch.setattr(weather, "air_quality", aq)
+    monkeypatch.setattr(summary.prayer, "today_line", ezan)
+
 
 def test_personal_summaries(fake_sources, member):
     with db() as con:
@@ -44,6 +49,7 @@ def test_personal_summaries(fake_sources, member):
     assert "📅 Bugün" in mem and "🖥 Sunucu" not in mem
     for text in (owner, mem):
         assert "Günaydın" in text and "⛅ Hava" in text and "🌍 Deprem" in text and "🏠 Ev" in text
+        assert "🌫 Hava kalitesi" in text and "🕌 İmsak" in text and "🔌 Planlı kesintiler" in text and "Kaynaklar" in text
     assert kv_json("ozet_state", {})["rates"]                 # kur geçmişi kaydedildi
 
 

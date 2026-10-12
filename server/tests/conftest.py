@@ -23,7 +23,9 @@ def fresh(tmp_path, monkeypatch):
     db.init_db()
     home.state.update(last_beat=0.0, boot_id=None, device=None, down_since=None, info={})
     home.live_waiters.clear()
-    home.ping_event.clear()
+    home.speed_waiters.clear()
+    home.pending_cmd["cmd"] = None
+    home.ping_event = asyncio.Event()     # her test kendi olay döngüsünü kullanır
     invites.codes.clear()
     invites.bad_attempts.clear()
     calendars.awaiting.clear()

@@ -6,7 +6,7 @@ from conftest import run
 
 from asistan import config
 from asistan.sources import calendar as cal_src
-from asistan.sources import quakes, rates, weather
+from asistan.sources import outages, pharmacy, prayer, quakes, rates, weather
 from asistan.sources.common import client
 
 pytestmark = pytest.mark.network
@@ -41,3 +41,25 @@ def test_calendar_holidays():
 def test_redirect_to_private_blocked():
     with pytest.raises(ValueError):
         with_client(lambda c: cal_src.fetch_public(c, "https://httpbin.org/redirect-to?url=https://127.0.0.1/x.ics"))
+
+
+def test_sedas():
+    assert isinstance(with_client(outages.sedas), list)
+
+
+def test_isu():
+    assert isinstance(with_client(outages.isu), list)
+
+
+def test_prayer():
+    days = with_client(prayer.month)
+    assert days and "Imsak" in days[0]
+
+
+def test_pharmacy():
+    day, items = with_client(pharmacy.fetch)
+    assert items and "Eczane" in items[0]["name"]
+
+
+def test_air_quality():
+    assert "Hava kalitesi" in with_client(weather.air_quality)

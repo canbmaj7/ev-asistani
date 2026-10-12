@@ -2,12 +2,14 @@
 import asyncio
 import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 
-from . import commands, config, home, panel, quakes, summary
-from .db import init_db
+from . import commands, config, home, panel, planned, prayer, quakes, summary, weather_alerts
+from .db import init_db, kv_set
 from .util import log
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -18,7 +20,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)   # URL'de bot token'ı var
 async def lifespan(app: FastAPI):
     init_db()
     home.load_state()
-    tasks = [asyncio.create_task(f()) for f in (home.monitor_loop, commands.loop, summary.loop, quakes.loop)]
+    loops = (home.monitor_loop, commands.loop, summary.loop, quakes.loop,
+             planned.loop, weather_alerts.loop, prayer.ramadan_loop)
+    tasks = [asyncio.create_task(f()) for f in loops]
     log.info("Ev Asistanı başladı (eşik %s sn, panel %s, özet %s, %d site, deprem M%s)",
              home.timeout_sec(), "açık" if config.PANEL_PASSWORD else "kapalı", config.SEND_AT,
              len(config.WATCH_URLS), config.QUAKE_MIN_MAG)
@@ -45,9 +49,22 @@ async def beat(b: home.Beat, x_token: str = Header(default="")):
 
 @app.post("/wait")
 async def wait(x_token: str = Header(default="")):
-    """Pi'nin uzun bekleme kanalı: /durum istenince hemen {"ping": true} döner."""
+    """Pi'nin uzun bekleme kanalı: /durum veya hız testi istenince hemen döner."""
     check_token(x_token)
-    return {"ping": await home.wait_for_ping()}
+    return await home.wait_for_ping()
+
+
+class Maintenance(BaseModel):
+    minutes: float = 15
+
+
+@app.post("/maintenance")
+async def maintenance(m: Maintenance, x_token: str = Header(default="")):
+    """Bakım modu: Pi yeniden başlatılırken kesinti mesajlarını susturur (en fazla 2 saat)."""
+    check_token(x_token)
+    until = time.time() + max(0.0, min(m.minutes, 120)) * 60
+    kv_set("mute_until", until)
+    return {"ok": True, "mute_until": until}
 
 
 @app.get("/health")

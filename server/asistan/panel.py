@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from . import config, devices, home, members, stats
+from . import config, devices, home, members, speed, stats
 from .db import db, kv_get
 
 router = APIRouter(prefix="/panel")
@@ -49,6 +49,7 @@ def data() -> dict:
         "timeout_sec": home.timeout_sec(), "members": members.count(),
         "since": float(kv_get("since") or 0) or None,
         "stats": stat, "daily": stats.daily_downtime(30), "outages": outs, "devices": devices.listing(),
+        "speedtests": speed.history(30),
     }
 
 

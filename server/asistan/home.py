@@ -4,7 +4,7 @@ import time
 
 from pydantic import BaseModel
 
-from . import config, devices, stats
+from . import config, devices, speed, stats
 from . import telegram as tg
 from .db import kv_get, kv_set
 from .util import fmt_dur, fmt_time
@@ -13,6 +13,8 @@ STARTED_AT = time.time()
 state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None, "info": {}}
 ping_event = asyncio.Event()       # /durum istendi: Pi'ye "şimdi ölç" sinyali (long-poll kanalı)
 live_waiters: list = []            # canlı yanıtı bekleyen istekler
+speed_waiters: list = []           # hız testi sonucunu bekleyen istekler
+pending_cmd: dict = {"cmd": None}  # Pi'ye uzun bekleme kanalıyla iletilecek komut
 
 
 class NetEvent(BaseModel):
@@ -28,6 +30,12 @@ class Beat(BaseModel):
     live: bool = False                  # /durum isteğine verilen canlı yanıt
     info: dict = {}                     # sıcaklık, Wi-Fi, gecikme vb.
     devices: list[dict] | None = None   # ağ taraması sonucu (yoksa None)
+    speedtest: dict | None = None       # hız testi sonucu (yoksa None)
+
+
+def muted() -> bool:
+    """Bakım modu (Pi güncellenirken): kesinti mesajı gönderilmez, kayıt tutulmaz."""
+    return time.time() < float(kv_get("mute_until") or 0)
 
 
 def timeout_sec() -> int:
@@ -54,15 +62,18 @@ async def handle_beat(b: Beat) -> None:
     if kv_get("since") is None:
         kv_set("since", now)
 
+    quiet = muted()
     # Pi'nin kendi ölçtüğü kısa internet kopmaları (alarm akışı zaten bildirmediyse)
-    if state["down_since"] is None and not rebooted:
+    if state["down_since"] is None and not rebooted and not quiet:
         for ev in b.net_events:
             ended = now - ev.ago
             started = ended - ev.dur
             stats.record_outage("internet", started, ended)
             await tg.send(f"🌐 Kısa internet kesintisi oldu\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ev.dur)}")
 
-    if state["down_since"] is not None:
+    if quiet:
+        pass
+    elif state["down_since"] is not None:
         started = state["down_since"]
         kind = "elektrik" if rebooted else "internet"
         ended = min(now, max(boot_time, started)) if rebooted else now   # açılış süresi sayılmasın
@@ -87,6 +98,12 @@ async def handle_beat(b: Beat) -> None:
         live_waiters.clear()
     if b.devices is not None:
         await devices.handle_scan(b.devices, now)
+    if b.speedtest:
+        speed.record(b.speedtest, b.speedtest.get("trigger", "gece"))
+        for f in speed_waiters:
+            if not f.done():
+                f.set_result(b.speedtest)
+        speed_waiters.clear()
     kv_set("last_beat", now)
     kv_set("boot_id", b.boot_id)
     kv_set("device", b.device)
@@ -98,21 +115,36 @@ async def monitor_loop() -> None:
     while True:
         await asyncio.sleep(10)
         ref = max(state["last_beat"], STARTED_AT)   # sunucu yeni açıldıysa yanlış alarm olmasın
-        if state["last_beat"] and state["down_since"] is None and time.time() - ref > timeout_sec():
+        if state["last_beat"] and state["down_since"] is None and time.time() - ref > timeout_sec() and not muted():
             state["down_since"] = state["last_beat"]
             kv_set("down_since", state["down_since"])
             await tg.send(f"⚠️ Evden nabız alınamıyor\nSon sinyal: {fmt_time(state['last_beat'])}\n"
                           "Elektrik ya da internet kesilmiş olabilir.")
 
 
-async def wait_for_ping() -> bool:
-    """Pi'nin uzun bekleme isteği: /durum istenirse hemen True döner."""
+async def wait_for_ping() -> dict:
+    """Pi'nin uzun bekleme isteği: bir şey istenirse hemen {"ping": True, "cmd": ...} döner."""
     try:
         await asyncio.wait_for(ping_event.wait(), config.WAIT_SEC)
     except asyncio.TimeoutError:
-        return False
+        return {"ping": False}
     ping_event.clear()
-    return True
+    cmd, pending_cmd["cmd"] = pending_cmd["cmd"], None
+    return {"ping": True, "cmd": cmd}
+
+
+async def request_speedtest() -> dict | None:
+    """Pi'ye şimdi hız testi yaptırır; sonucu (ya da zaman aşımında None) döndürür."""
+    fut = asyncio.get_running_loop().create_future()
+    speed_waiters.append(fut)
+    pending_cmd["cmd"] = "speedtest"
+    ping_event.set()
+    try:
+        return await asyncio.wait_for(fut, config.SPEEDTEST_TIMEOUT)
+    except asyncio.TimeoutError:
+        if fut in speed_waiters:
+            speed_waiters.remove(fut)
+        return None
 
 
 async def live_measure() -> bool:
@@ -174,6 +206,8 @@ def summary_section() -> str:
         if info.get("temp") is not None:
             bits.append(f"{info['temp']}°C")
         lines.append(" · ".join(bits))
+    if line := speed.summary_line():
+        lines.append(line)
     st = stats.outage_stats(1)
     if st["kinds"]:
         lines.append("Son 24 saat kesinti: " + ", ".join(

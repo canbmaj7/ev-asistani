@@ -40,3 +40,30 @@ async def section(c: httpx.AsyncClient) -> str:
     if day["temperature_2m_min"] <= 2:
         lines.append("🧣 Don/buzlanma olabilir, sıkı giyin.")
     return "\n".join(lines)
+
+
+AQI_LEVELS = [(20, "İyi 🟢"), (40, "Makul 🟢"), (60, "Orta 🟡"), (80, "Kötü 🟠"), (100, "Çok kötü 🔴"), (10**9, "Son derece kötü 🟣")]
+
+
+async def air_quality(c: httpx.AsyncClient) -> str:
+    """Avrupa hava kalitesi endeksi (Open-Meteo)."""
+    r = await c.get("https://air-quality-api.open-meteo.com/v1/air-quality", params={
+        "latitude": config.LAT, "longitude": config.LON, "timezone": str(config.TZ),
+        "current": "european_aqi,pm2_5,pm10"})
+    r.raise_for_status()
+    cur = r.json()["current"]
+    aqi = cur.get("european_aqi")
+    if aqi is None:
+        raise ValueError("hava kalitesi verisi yok")
+    level = next(label for limit, label in AQI_LEVELS if aqi <= limit)
+    return f"🌫 Hava kalitesi: {level} (AQI {round(aqi)} · PM2.5 {round(cur.get('pm2_5') or 0)} · PM10 {round(cur.get('pm10') or 0)} µg/m³)"
+
+
+async def forecast(c: httpx.AsyncClient) -> dict:
+    """Anlık uyarılar için kısa vadeli tahmin: 15 dakikalık yağış (2 sa) ve saatlik (12 sa)."""
+    r = await c.get("https://api.open-meteo.com/v1/forecast", params={
+        "latitude": config.LAT, "longitude": config.LON, "timezone": str(config.TZ),
+        "minutely_15": "precipitation", "forecast_minutely_15": 8,
+        "hourly": "precipitation,wind_gusts_10m,weather_code,temperature_2m", "forecast_hours": 14})
+    r.raise_for_status()
+    return r.json()

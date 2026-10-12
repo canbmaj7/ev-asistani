@@ -31,7 +31,7 @@ th{color:var(--muted);font-weight:600;font-size:.8rem}
 tr:last-child td{border-bottom:0}.scroll{overflow-x:auto}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--line)}.dot.on{background:var(--ok)}
 svg{display:block;width:100%;height:auto}
-.axis{fill:var(--muted);font-size:10px}.bar{fill:var(--bar)}.zero{fill:var(--line)}
+.axis{fill:var(--muted);font-size:10px}.bar{fill:var(--bar)}.zero{fill:var(--line)}.speed{fill:var(--ok)}
 </style>
 </head>
 <body>
@@ -54,6 +54,12 @@ svg{display:block;width:100%;height:auto}
   <section class="card" style="margin-bottom:14px">
     <h2>Günlük kesinti süresi (dakika)</h2>
     <div id="chart" role="img" aria-label="Son 30 günün günlük kesinti süresi grafiği"></div>
+  </section>
+
+  <section class="card" style="margin-bottom:14px">
+    <h2>İnternet hızı (indirme, Mbps)</h2>
+    <div id="speedchart" role="img" aria-label="Son hız testlerinin indirme hızı grafiği"></div>
+    <div class="scroll" id="speeds" style="margin-top:10px"></div>
   </section>
 
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
@@ -80,6 +86,24 @@ function stats(box, st){
     kv(p, '🌐 İnternet', `${i.n} · ${fmtDur(i.sec)}`);
     kv(p, 'En uzun kesinti', st.longest ? fmtDur(st.longest) : '—');
   });
+}
+
+function speedChart(list){
+  const box = $('speedchart');
+  if (!list.length) { fill(box, p => p.append(el('p', 'Henüz ölçüm yok. Pi her gece 03:30\'da ölçer.', 'muted'))); return; }
+  const pts = list.slice().reverse(), W = 640, H = 140, L = 34, B = 22, T = 8, n = pts.length, bw = (W-L)/Math.max(n, 1);
+  const max = Math.max(10, Math.ceil(Math.max(...pts.map(p => p.down_mbps || 0)) / 10) * 10);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const mk = (t, a, txt) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
+  for (const f of [0, .5, 1]) svg.append(mk('text', {x: L-6, y: T + (H-B-T)*(1-f) + 3, 'text-anchor': 'end', class: 'axis'}, Math.round(max*f)));
+  pts.forEach((p, i) => {
+    const v = p.down_mbps || 0, h = Math.max(2, (H-B-T) * v / max), x = L + i*bw + 1.5;
+    const r = mk('rect', {x, y: H-B-h, width: Math.max(bw-3, 2), height: h, rx: 2, class: 'speed'});
+    r.append(mk('title', {}, `${fmtTime(p.at)}: ↓ ${v.toFixed(1)} / ↑ ${(p.up_mbps || 0).toFixed(1)} Mbps · ping ${Math.round(p.ping_ms || 0)} ms`));
+    svg.append(r);
+  });
+  fill(box, p => p.append(svg));
 }
 
 function chart(days){
@@ -130,6 +154,9 @@ function render(d){
   });
   stats($('s7'), d.stats['7']); stats($('s30'), d.stats['30']);
   chart(d.daily);
+  speedChart(d.speedtests || []);
+  table($('speeds'), ['Zaman', 'İndirme', 'Yükleme', 'Ping'],
+    (d.speedtests || []).slice(0, 7).map(p => [fmtTime(p.at), `${(p.down_mbps || 0).toFixed(1)} Mbps`, `${(p.up_mbps || 0).toFixed(1)} Mbps`, `${Math.round(p.ping_ms || 0)} ms`]), '');
   table($('outages'), ['Tür', 'Başlangıç', 'Süre'],
     d.outages.map(o => [o.kind === 'elektrik' ? '⚡ Elektrik' : '🌐 İnternet', fmtTime(o.started), fmtDur(o.ended - o.started)]), 'Kayıtlı kesinti yok 🎉');
   table($('devices'), ['Cihaz', 'IP', 'Son görülme'],

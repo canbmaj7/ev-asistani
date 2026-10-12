@@ -35,3 +35,17 @@ def spawn(coro) -> None:
     t = asyncio.create_task(coro)
     _background.add(t)
     t.add_done_callback(_background.discard)
+
+
+_TR = str.maketrans({"ı": "i", "İ": "i", "I": "i", "ş": "s", "Ş": "s", "ç": "c", "Ç": "c",
+                     "ö": "o", "Ö": "o", "ü": "u", "Ü": "u", "ğ": "g", "Ğ": "g", "â": "a", "î": "i", "û": "u"})
+
+
+def norm(s: str) -> str:
+    """Türkçe karşılaştırma için: 'KÖSKLÜ ÇESME' == 'Köşklüçeşme' → 'koskluceme'… boşluksuz, aksansız."""
+    return "".join(ch for ch in (s or "").translate(_TR).lower() if ch.isalnum())
+
+
+def in_quiet_hours(hour: int, quiet: tuple[int, int]) -> bool:
+    start, end = quiet
+    return hour >= start or hour < end if start > end else start <= hour < end

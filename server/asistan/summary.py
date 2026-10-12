@@ -3,7 +3,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 
-from . import calendars, config, home, members
+from . import calendars, config, home, members, planned, prayer
 from . import telegram as tg
 from .db import kv_get, kv_json, kv_set
 from .sources import calendar as cal_src
@@ -11,7 +11,9 @@ from .sources import quakes, rates, server, weather
 from .sources.common import client, tr_date
 from .util import log
 
-LABELS = {"hava": "🌤 Hava", "kur": "💱 Kur", "takvim": "📅 Takvim", "deprem": "🌍 Deprem", "sunucu": "🖥 Sunucu"}
+LABELS = {"hava": "🌤 Hava", "kalite": "🌫 Hava kalitesi", "ezan": "🕌 Ezan vakitleri", "kur": "💱 Kur",
+          "takvim": "📅 Takvim", "deprem": "🌍 Deprem", "sunucu": "🖥 Sunucu"}
+SOURCES = "🔗 Kaynaklar: Open-Meteo · TCMB · Diyanet · AFAD · SEDAŞ · İSU"
 
 
 async def build(chat_id: int) -> str:
@@ -22,22 +24,29 @@ async def build(chat_id: int) -> str:
     async with client() as c:
         jobs = {
             "hava": weather.section(c),
+            "kalite": weather.air_quality(c),
+            "ezan": prayer.today_line(),
             "kur": rates.section(c, st),
             "takvim": cal_src.section(c, cal_url, now) if cal_url else None,
             "deprem": quakes.fetch(c),
             "sunucu": server.section(c, config.WATCH_URLS) if members.is_owner(chat_id) else None,
         }
         names = [k for k, v in jobs.items() if v is not None]
-        results = await asyncio.gather(*(jobs[k] for k in names), return_exceptions=True)
+        results = dict(zip(names, await asyncio.gather(*(jobs[k] for k in names), return_exceptions=True)))
     kv_set("ozet_state", json.dumps(st))
-    parts = [f"☀️ Günaydın! {tr_date(now)}"]
-    for name, res in zip(names, results):
+
+    def part(name: str) -> str | None:
+        if name not in results:
+            return None
+        res = results[name]
         if isinstance(res, Exception):
-            parts.append(f"{LABELS[name]}: alınamadı ({type(res).__name__})")
-        else:
-            parts.append(quakes.section(res) if name == "deprem" else res)
-    parts.append(home.summary_section())
-    return "\n\n".join(parts)
+            return f"{LABELS[name]}: alınamadı ({type(res).__name__})"
+        return quakes.section(res) if name == "deprem" else res
+
+    weather_block = "\n".join(p for p in (part("hava"), part("kalite")) if p)
+    parts = [f"☀️ Günaydın! {tr_date(now)}", weather_block, part("ezan"), part("kur"), part("takvim"),
+             planned.section(), part("deprem"), home.summary_section(), part("sunucu"), SOURCES]
+    return "\n\n".join(p for p in parts if p)
 
 
 def due(now: datetime, last_sent: str | None) -> bool:

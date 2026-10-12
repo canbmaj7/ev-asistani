@@ -31,3 +31,21 @@ WATCH_URLS = [u.strip() for u in os.getenv("WATCH_URLS", "").split(",") if u.str
 QUAKE_MIN_MAG = float(os.getenv("QUAKE_MIN_MAG", "4.0"))
 QUAKE_MAX_OFFSHORE_KM = float(os.getenv("QUAKE_MAX_OFFSHORE_KM", "100"))
 QUAKE_POLL_SEC = int(os.getenv("QUAKE_POLL_SEC", "60"))
+
+# Planlı kesintiler (SEDAŞ elektrik, İSU su)
+DISTRICT = os.getenv("DISTRICT", "GEBZE")                    # SEDAŞ ilçe adı
+NEIGHBORHOOD = os.getenv("NEIGHBORHOOD", "")                 # anında uyarı yalnızca bu mahalle için (boşsa uyarı yok)
+PLANNED_POLL_SEC = int(os.getenv("PLANNED_POLL_SEC", "10800"))
+
+# Anlık hava uyarıları
+WEATHER_POLL_SEC = int(os.getenv("WEATHER_POLL_SEC", "900"))
+QUIET_HOURS = (23, 7)                                        # bu saatlerde yalnızca ciddi uyarılar
+
+# Ezan vakitleri (Diyanet verisi, ezanvakti.emushaf.net ilçe kodu; 9651 = Gebze)
+PRAYER_DISTRICT_ID = os.getenv("PRAYER_DISTRICT_ID", "9651")
+
+# Nöbetçi eczane (Habertürk listesi)
+PHARMACY_URL = os.getenv("PHARMACY_URL", "https://www.haberturk.com/nobetci-eczaneler/kocaeli/gebze")
+
+# Hız testi (Pi yapar, sunucu kaydeder)
+SPEEDTEST_TIMEOUT = 150
