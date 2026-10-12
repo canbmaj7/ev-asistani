@@ -1,0 +1,33 @@
+services:
+  nobetci:
+    build: .
+    container_name: nobetci
+    restart: unless-stopped
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      BEAT_TOKEN: ${BEAT_TOKEN}
+      TIMEOUT_SEC: ${TIMEOUT_SEC:-120}
+    volumes:
+      - nobetci-data:/data
+    networks:
+      - coolify
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.routers.nobetci-http.entryPoints=http
+      - traefik.http.routers.nobetci-http.rule=Host(`${NOBETCI_DOMAIN}`)
+      - traefik.http.routers.nobetci-http.middlewares=nobetci-redirect
+      - traefik.http.middlewares.nobetci-redirect.redirectscheme.scheme=https
+      - traefik.http.routers.nobetci.entryPoints=https
+      - traefik.http.routers.nobetci.rule=Host(`${NOBETCI_DOMAIN}`)
+      - traefik.http.routers.nobetci.tls=true
+      - traefik.http.routers.nobetci.tls.certresolver=letsencrypt
+      - traefik.http.services.nobetci.loadbalancer.server.port=8000
+
+networks:
+  coolify:
+    external: true
+
+volumes:
+  nobetci-data:

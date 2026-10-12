@@ -1,0 +1,13 @@
+[Unit]
+Description=Nöbetçi nabız ajanı
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/nobetci.env
+ExecStart=/usr/bin/python3 /opt/nobetci/heartbeat.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+.env
+*.token
+__pycache__/
+# Yerel proje belleği: sunucu ve altyapı bilgisi içerir, public repoya girmez
+memory-bank/
