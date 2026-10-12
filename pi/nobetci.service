@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 EnvironmentFile=/etc/nobetci.env
 ExecStart=/usr/bin/python3 /opt/nobetci/heartbeat.py
+# Ajan her 10 sn'de systemd'ye "yaşıyorum" der; 120 sn sessiz kalırsa yeniden başlatılır
+NotifyAccess=main
+WatchdogSec=120
 Restart=always
 RestartSec=5
 

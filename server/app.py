@@ -7,15 +7,19 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -24,6 +28,8 @@ BEAT_TOKEN = os.environ["BEAT_TOKEN"]
 TIMEOUT_SEC = int(os.getenv("TIMEOUT_SEC", "120"))
 DB_PATH = os.getenv("DB_PATH", "/data/nobetci.db")
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Istanbul"))
+PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")      # boşsa web paneli kapalı
+ONLINE_SEC = 900                                      # cihaz bu süre içinde görüldüyse "çevrimiçi"
 
 log = logging.getLogger("nobetci")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -58,6 +64,15 @@ def init_db() -> None:
             )"""
         )
         con.execute(
+            """CREATE TABLE IF NOT EXISTS devices (
+                mac TEXT PRIMARY KEY,
+                ip TEXT, host TEXT,
+                name TEXT NOT NULL DEFAULT '',
+                first_seen REAL NOT NULL,
+                last_seen REAL NOT NULL
+            )"""
+        )
+        con.execute(
             """CREATE TABLE IF NOT EXISTS outages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
@@ -76,6 +91,14 @@ def kv_get(k: str):
     with db() as con:
         row = con.execute("SELECT v FROM kv WHERE k = ?", (k,)).fetchone()
     return row["v"] if row else None
+
+
+def timeout_sec() -> int:
+    """Alarm eşiği (sn). /esik ile değiştirilebilir, yoksa ortam değişkeni."""
+    try:
+        return int(kv_get("timeout_sec") or TIMEOUT_SEC)
+    except ValueError:
+        return TIMEOUT_SEC
 
 
 def load_state() -> None:
@@ -135,6 +158,150 @@ def record_outage(kind: str, started: float, ended: float) -> None:
         )
 
 
+# ---------- Ağ cihazları ----------
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+
+
+def clean(v, n: int = 60) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]", "", str(v or ""))[:n]
+
+
+async def handle_devices(devs: list[dict], now: float) -> None:
+    """Pi'nin ağ taramasını işler; ilk taramayı başlangıç listesi sayar, sonradan görülenleri bildirir."""
+    seen = {}
+    for d in devs[:150]:
+        mac = clean(d.get("mac")).lower()
+        if MAC_RE.match(mac) and mac != "00:00:00:00:00:00":
+            seen[mac] = (clean(d.get("ip"), 45), clean(d.get("host")))
+    if not seen:
+        return
+    with db() as con:
+        known = {r["mac"] for r in con.execute("SELECT mac FROM devices")}
+        first = not known
+        new = []
+        for mac, (ip, host) in seen.items():
+            if mac in known:
+                con.execute(
+                    "UPDATE devices SET ip = ?, host = COALESCE(NULLIF(?, ''), host), last_seen = ? WHERE mac = ?",
+                    (ip, host, now, mac),
+                )
+            else:
+                con.execute(
+                    "INSERT INTO devices (mac, ip, host, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
+                    (mac, ip, host, now, now),
+                )
+                new.append((mac, ip, host))
+    if first:
+        await send(
+            f"📋 Ağda {len(seen)} cihaz bulundu ve başlangıç listesine kaydedildi.\n"
+            "Bundan sonra listede olmayan yeni bir cihaz bağlanınca haber vereceğim.\n"
+            "Liste: /cihazlar · İsim vermek için: /cihaz SON4 isim",
+            to=[TELEGRAM_CHAT_ID],
+        )
+        return
+    for mac, ip, host in new:
+        await send(
+            "🆕 Ağda yeni bir cihaz göründü\n"
+            f"IP: {ip or '?'}  ·  Ad: {host or 'bilinmiyor'}\n"
+            f"MAC: {mac}\n"
+            f"Tanıyorsan isim ver: /cihaz {mac.replace(':', '')[-4:]} isim",
+            to=[TELEGRAM_CHAT_ID],
+        )
+
+
+def devices_text() -> str:
+    now = time.time()
+    with db() as con:
+        rows = con.execute("SELECT * FROM devices ORDER BY last_seen DESC").fetchall()
+    if not rows:
+        return "Henüz tarama sonucu yok. (Pi her 5 dakikada bir tarar.)"
+    on = sum(1 for r in rows if now - r["last_seen"] < ONLINE_SEC)
+    lines = [f"📡 Ağ cihazları ({on} çevrimiçi / {len(rows)} kayıtlı)"]
+    for r in rows[:60]:
+        dot = "🟢" if now - r["last_seen"] < ONLINE_SEC else "⚪"
+        label = r["name"] or r["host"] or "adsız"
+        lines.append(f"{dot} {label} · {r['ip'] or '?'} · …{r['mac'].replace(':', '')[-4:]}")
+    return "\n".join(lines)
+
+
+def name_device(arg: str) -> str:
+    token, _, name = arg.strip().partition(" ")
+    token = token.lower().replace(":", "")
+    name = clean(name.strip(), 40)
+    if not token or not name:
+        return "Kullanım: /cihaz SON4 isim   (SON4: /cihazlar listesindeki …xxxx)"
+    with db() as con:
+        rows = con.execute("SELECT mac FROM devices WHERE replace(mac, ':', '') LIKE ?", ("%" + token,)).fetchall()
+        if len(rows) != 1:
+            return "Böyle bir cihaz yok." if not rows else "Birden çok cihaz eşleşti, daha uzun yaz."
+        con.execute("UPDATE devices SET name = ? WHERE mac = ?", (name, rows[0]["mac"]))
+    return f"✅ Kaydedildi: {name}"
+
+
+# ---------- İstatistik ----------
+def outage_stats(days: int) -> dict:
+    now = time.time()
+    lo = now - days * 86400
+    since = float(kv_get("since") or now)
+    span = max(min(now - lo, now - since), 1)
+    with db() as con:
+        rows = con.execute("SELECT kind, started, ended FROM outages WHERE ended > ?", (lo,)).fetchall()
+    out = {"span": span, "total": 0.0, "longest": None, "kinds": {}}
+    for r in rows:
+        dur = r["ended"] - max(r["started"], lo)
+        k = out["kinds"].setdefault(r["kind"], {"n": 0, "sec": 0.0})
+        k["n"] += 1
+        k["sec"] += dur
+        out["total"] += dur
+        if out["longest"] is None or dur > out["longest"][0]:
+            out["longest"] = (dur, r["started"])
+    out["avail"] = max(0.0, 1 - out["total"] / span)
+    return out
+
+
+def report_text(days_list=(7, 30)) -> str:
+    since = kv_get("since")
+    parts = []
+    for days in days_list:
+        st = outage_stats(days)
+        title = f"📊 Son {days} gün"
+        if st["span"] < days * 86400:
+            title += f" (kayıt {fmt_dur(st['span'])}lik)" if st["span"] < 3600 else f" (kayıt {st['span'] / 86400:.1f} günlük)"
+        lines = [title]
+        if not st["kinds"]:
+            lines.append("Hiç kesinti olmadı 🎉")
+        for kind, icon, label in (("elektrik", "⚡", "Elektrik"), ("internet", "🌐", "İnternet")):
+            k = st["kinds"].get(kind)
+            if k:
+                lines.append(f"{icon} {label}: {k['n']} kesinti · toplam {fmt_dur(k['sec'])}")
+        if st["longest"]:
+            lines.append(f"⏳ En uzun: {fmt_dur(st['longest'][0])} ({fmt_time(st['longest'][1])[:16]})")
+        lines.append("✅ Erişilebilirlik: %" + f"{st['avail'] * 100:.2f}".replace(".", ","))
+        parts.append("\n".join(lines))
+    if since:
+        parts.append(f"Kayıt başlangıcı: {fmt_time(float(since))[:16]}")
+    return "\n\n".join(parts)
+
+
+def daily_downtime(days: int = 30) -> list[dict]:
+    """Son N günün günlük kesinti süresi (sn); gece yarısını aşan kesintiler bölünür."""
+    today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    first = today - timedelta(days=days - 1)
+    buckets = {(first + timedelta(days=i)).strftime("%d.%m"): 0.0 for i in range(days)}
+    with db() as con:
+        rows = con.execute("SELECT started, ended FROM outages WHERE ended > ?", (first.timestamp(),)).fetchall()
+    for r in rows:
+        t = datetime.fromtimestamp(max(r["started"], first.timestamp()), TZ)
+        end = datetime.fromtimestamp(r["ended"], TZ)
+        while t < end:
+            nxt = (t.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+            key = t.strftime("%d.%m")
+            if key in buckets:
+                buckets[key] += (min(nxt, end) - t).total_seconds()
+            t = nxt
+    return [{"day": k, "sec": round(v)} for k, v in buckets.items()]
+
+
 # ---------- Nabız ----------
 class NetEvent(BaseModel):
     dur: float   # kopma süresi (sn)
@@ -148,6 +315,7 @@ class Beat(BaseModel):
     net_events: list[NetEvent] = []
     live: bool = False          # /durum isteğine verilen canlı yanıt
     info: dict = {}             # sıcaklık, Wi-Fi, gecikme vb.
+    devices: list[dict] | None = None   # Pi'nin ağ taraması sonucu (yoksa None)
 
 
 async def handle_beat(b: Beat) -> None:
@@ -155,6 +323,9 @@ async def handle_beat(b: Beat) -> None:
     prev_beat = state["last_beat"]
     prev_boot = state["boot_id"]
     rebooted = prev_boot is not None and prev_boot != b.boot_id
+    boot_time = now - b.uptime if b.uptime else now   # elektriğin geri geldiği an (Pi açılışı)
+    if kv_get("since") is None:
+        kv_set("since", now)
     # Alarm akışı zaten bu kesintiyi bildirdiyse Pi'nin kendi ölçümünü tekrar yazma
     already_reported = state["down_since"] is not None or rebooted
 
@@ -172,21 +343,24 @@ async def handle_beat(b: Beat) -> None:
     if state["down_since"] is not None:
         started = state["down_since"]
         kind = "elektrik" if rebooted else "internet"
-        record_outage(kind, started, now)
+        # Elektrikte süre, Pi'nin açılış süresini içermesin
+        ended = min(now, max(boot_time, started)) if rebooted else now
+        record_outage(kind, started, ended)
         icon = "⚡ Elektrik kesintisi bitti" if rebooted else "🌐 İnternet kesintisi bitti"
         await send(
             f"✅ {icon}\n"
             f"Başlangıç: {fmt_time(started)}\n"
-            f"Süre: {fmt_dur(now - started)}"
+            f"Süre: {fmt_dur(ended - started)}"
         )
     elif rebooted and prev_beat:
         # Alarm eşiğine varmadan biten kısa elektrik kesintisi
         started = prev_beat
-        record_outage("elektrik", started, now)
+        ended = min(now, max(boot_time, started))
+        record_outage("elektrik", started, ended)
         await send(
             f"⚡ Kısa elektrik kesintisi oldu\n"
             f"Başlangıç: {fmt_time(started)}\n"
-            f"Süre: yaklaşık {fmt_dur(now - started)}"
+            f"Süre: yaklaşık {fmt_dur(ended - started)}"
         )
 
     state.update(last_beat=now, boot_id=b.boot_id, device=b.device, down_since=None)
@@ -197,6 +371,8 @@ async def handle_beat(b: Beat) -> None:
             if not f.done():
                 f.set_result(True)
         live_waiters.clear()
+    if b.devices is not None:
+        await handle_devices(b.devices, now)
     kv_set("last_beat", now)
     kv_set("boot_id", b.boot_id)
     kv_set("device", b.device)
@@ -211,7 +387,7 @@ async def monitor_loop() -> None:
         if (
             state["last_beat"]
             and state["down_since"] is None
-            and time.time() - ref > TIMEOUT_SEC
+            and time.time() - ref > timeout_sec()
         ):
             state["down_since"] = state["last_beat"]
             kv_set("down_since", state["down_since"])
@@ -238,8 +414,22 @@ def fmt_info(info: dict) -> str:
     return "\n".join(lines)
 
 
+async def live_measure() -> bool:
+    """Pi'ye anlık ölçüm yaptırır. Pi zamanında yanıt verdiyse True."""
+    fut = asyncio.get_running_loop().create_future()
+    live_waiters.append(fut)
+    ping_event.set()
+    try:
+        await asyncio.wait_for(fut, LIVE_TIMEOUT)
+        return True
+    except asyncio.TimeoutError:
+        if fut in live_waiters:
+            live_waiters.remove(fut)
+        ping_event.clear()
+        return False
+
+
 async def live_status() -> str:
-    """Pi'ye anlık ölçüm yaptırıp sonucu döndürür."""
     if not state["last_beat"]:
         return "Henüz hiç nabız alınmadı."
     ago = time.time() - state["last_beat"]
@@ -248,23 +438,14 @@ async def live_status() -> str:
             f"🔴 Bağlantı yok\nSon sinyal: {fmt_time(state['last_beat'])} "
             f"({fmt_dur(ago)} önce)"
         )
-    fut = asyncio.get_running_loop().create_future()
-    live_waiters.append(fut)
-    ping_event.set()
     t0 = time.time()
-    try:
-        await asyncio.wait_for(fut, LIVE_TIMEOUT)
-    except asyncio.TimeoutError:
-        if fut in live_waiters:
-            live_waiters.remove(fut)
-        ping_event.clear()
+    if not await live_measure():
         return (
             f"🟠 Pi canlı kontrole {LIVE_TIMEOUT} sn içinde yanıt vermedi.\n"
             f"Son sinyal {fmt_dur(time.time() - state['last_beat'])} önce geldi; "
             "bağlantı yavaş ya da kesilmek üzere olabilir."
         )
-    took = time.time() - t0
-    return f"🟢 Her şey yolunda (canlı ölçüm, {took:.1f} sn)\n{fmt_info(state['info'])}"
+    return f"🟢 Her şey yolunda (canlı ölçüm, {time.time() - t0:.1f} sn)\n{fmt_info(state['info'])}"
 
 
 async def reply_status(chat_id: int) -> None:
@@ -289,8 +470,12 @@ INVITE_TTL = 600
 invites: dict[str, float] = {}        # davet kodu -> son geçerlilik zamanı
 bad_attempts: list[float] = []        # hatalı /katil denemeleri (kaba kuvveti sınırlamak için)
 
-HELP_MEMBER = "/durum – canlı durum\n/gecmis – son kesintiler\n/ayril – bildirimlerden çık"
-HELP_OWNER = HELP_MEMBER + "\n/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar"
+HELP_MEMBER = "/durum – canlı durum\n/gecmis – son kesintiler\n/rapor – 7 ve 30 günlük istatistik\n/ayril – bildirimlerden çık"
+HELP_OWNER = (
+    "/durum – canlı durum\n/gecmis – son kesintiler\n/rapor [gün] – kesinti istatistiği\n"
+    "/esik [dk] – alarm eşiği (şimdi/değiştir)\n/cihazlar – ağdaki cihazlar\n/cihaz SON4 isim – cihaza isim ver\n"
+    "/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar"
+)
 
 
 def spawn(coro) -> None:
@@ -340,6 +525,30 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         spawn(reply_status(chat_id))
     elif cmd in ("/gecmis", "/geçmiş"):
         await send(history_text(), to=[chat_id])
+    elif cmd == "/rapor":
+        try:
+            days = int(arg.strip())
+            await send(report_text((max(1, min(days, 365)),)), to=[chat_id])
+        except ValueError:
+            await send(report_text(), to=[chat_id])
+    elif owner and cmd == "/esik":
+        if not arg.strip():
+            await send(f"Alarm eşiği şu an {timeout_sec() // 60} dk {timeout_sec() % 60} sn. Değiştirmek için: /esik 3", to=[chat_id])
+            return
+        try:
+            minutes = float(arg.strip().replace(",", "."))
+        except ValueError:
+            await send("Kullanım: /esik DAKİKA  (örn. /esik 3)", to=[chat_id])
+            return
+        if not 2 <= minutes <= 60:
+            await send("Eşik 2 ile 60 dakika arasında olmalı (Pi 30 sn'de bir nabız yollar).", to=[chat_id])
+            return
+        kv_set("timeout_sec", int(minutes * 60))
+        await send(f"✅ Alarm eşiği {minutes:g} dakika yapıldı.", to=[chat_id])
+    elif owner and cmd == "/cihazlar":
+        await send(devices_text(), to=[chat_id])
+    elif owner and cmd == "/cihaz":
+        await send(name_device(arg), to=[chat_id])
     elif cmd in ("/yardim", "/yardım", "/help"):
         await send(HELP_OWNER if owner else HELP_MEMBER, to=[chat_id])
     elif cmd == "/ayril" and not owner:
@@ -379,6 +588,7 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
 MEMBER_COMMANDS = [
     {"command": "durum", "description": "Canlı durum: internet, sıcaklık, Wi-Fi"},
     {"command": "gecmis", "description": "Son kesintiler"},
+    {"command": "rapor", "description": "7 ve 30 günlük kesinti istatistiği"},
     {"command": "yardim", "description": "Komut listesi"},
     {"command": "katil", "description": "Davet koduyla bildirimlere katıl"},
     {"command": "ayril", "description": "Bildirimlerden çık"},
@@ -386,6 +596,9 @@ MEMBER_COMMANDS = [
 OWNER_COMMANDS = [
     c for c in MEMBER_COMMANDS if c["command"] not in ("katil", "ayril")
 ] + [
+    {"command": "esik", "description": "Alarm eşiği: /esik 3 (dakika)"},
+    {"command": "cihazlar", "description": "Ağdaki cihazlar"},
+    {"command": "cihaz", "description": "Cihaza isim ver: /cihaz SON4 isim"},
     {"command": "davet", "description": "Yeni üye için davet kodu üret"},
     {"command": "uyeler", "description": "Üyeleri listele"},
     {"command": "cikar", "description": "Üyeyi çıkar: /cikar ID"},
@@ -436,7 +649,7 @@ async def lifespan(app: FastAPI):
     load_state()
     await set_commands()
     tasks = [asyncio.create_task(monitor_loop()), asyncio.create_task(telegram_loop())]
-    log.info("Nöbetçi başladı (eşik %s sn)", TIMEOUT_SEC)
+    log.info("Nöbetçi başladı (eşik %s sn, panel %s)", timeout_sec(), "açık" if PANEL_PASSWORD else "kapalı")
     yield
     for t in tasks:
         t.cancel()
@@ -464,6 +677,67 @@ async def wait(x_token: str = Header(default="")):
         return {"ping": False}
     ping_event.clear()
     return {"ping": True}
+
+
+# ---------- Web paneli ----------
+basic = HTTPBasic(auto_error=False)
+panel_failures: list[float] = []
+PANEL_HTML = Path(__file__).with_name("panel.html")
+
+
+def panel_auth(c: HTTPBasicCredentials | None = Depends(basic)) -> None:
+    if not PANEL_PASSWORD:
+        raise HTTPException(status_code=404)
+    now = time.time()
+    panel_failures[:] = [t for t in panel_failures if now - t < 600]
+    if len(panel_failures) >= 10:
+        raise HTTPException(status_code=429, detail="çok fazla hatalı deneme")
+    if c is None or not hmac.compare_digest(c.password.encode(), PANEL_PASSWORD.encode()):
+        if c is not None:
+            panel_failures.append(now)
+        raise HTTPException(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Nöbetçi"'})
+
+
+def panel_data() -> dict:
+    now = time.time()
+    with db() as con:
+        outs = [dict(r) for r in con.execute("SELECT kind, started, ended FROM outages ORDER BY id DESC LIMIT 30")]
+        devs = [dict(r) for r in con.execute("SELECT mac, ip, host, name, last_seen FROM devices ORDER BY last_seen DESC LIMIT 100")]
+        members = con.execute("SELECT COUNT(*) FROM members").fetchone()[0]
+    stats = {}
+    for d in (7, 30):
+        st = outage_stats(d)
+        stats[str(d)] = {
+            "total": round(st["total"]), "avail": st["avail"],
+            "longest": round(st["longest"][0]) if st["longest"] else 0,
+            "kinds": {k: {"n": v["n"], "sec": round(v["sec"])} for k, v in st["kinds"].items()},
+        }
+    return {
+        "now": now,
+        "status": "down" if state["down_since"] is not None else ("up" if state["last_beat"] else "empty"),
+        "last_beat": state["last_beat"], "down_since": state["down_since"],
+        "info": state["info"], "timeout_sec": timeout_sec(), "members": members,
+        "since": float(kv_get("since") or 0) or None,
+        "stats": stats, "daily": daily_downtime(30), "outages": outs,
+        "devices": [{**d, "online": now - d["last_seen"] < ONLINE_SEC} for d in devs],
+    }
+
+
+@app.get("/panel", response_class=HTMLResponse, dependencies=[Depends(panel_auth)])
+async def panel():
+    return HTMLResponse(PANEL_HTML.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/panel/data", dependencies=[Depends(panel_auth)])
+async def panel_json():
+    return panel_data()
+
+
+@app.post("/panel/live", dependencies=[Depends(panel_auth)])
+async def panel_live():
+    if state["down_since"] is None and state["last_beat"]:
+        await live_measure()
+    return panel_data()
 
 
 @app.get("/health")

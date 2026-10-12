@@ -8,6 +8,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       BEAT_TOKEN: ${BEAT_TOKEN}
       TIMEOUT_SEC: ${TIMEOUT_SEC:-120}
+      PANEL_PASSWORD: ${PANEL_PASSWORD:-}
     volumes:
       - nobetci-data:/data
     networks:
