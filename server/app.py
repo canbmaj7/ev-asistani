@@ -36,7 +36,6 @@ PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")      # boşsa web paneli kapal�
 ONLINE_SEC = 900                                      # cihaz bu süre içinde görüldüyse "çevrimiçi"
 SEND_AT = os.getenv("SEND_AT", "08:00")               # sabah özeti saati
 SUMMARY_CATCHUP_H = 2                                 # geç açılışta en fazla bu kadar saat telafi
-CALENDAR_ICS = os.getenv("CALENDAR_ICS", "")          # Google Takvim gizli iCal adresi (isteğe bağlı)
 WATCH_URLS = [u.strip() for u in os.getenv("WATCH_URLS", "").split(",") if u.strip()]
 QUAKE_POLL_SEC = int(os.getenv("QUAKE_POLL_SEC", "60"))
 
@@ -69,6 +68,13 @@ def init_db() -> None:
             """CREATE TABLE IF NOT EXISTS members (
                 chat_id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
+                added REAL NOT NULL
+            )"""
+        )
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS calendars (
+                chat_id INTEGER PRIMARY KEY,
+                url TEXT NOT NULL,
                 added REAL NOT NULL
             )"""
         )
@@ -439,11 +445,11 @@ def home_section() -> str:
     return "\n".join(lines)
 
 
-async def summary_text(full: bool) -> str:
-    """full=True: sahip için (sunucu dahil); False: üyeler için."""
+async def summary_text(chat_id: int) -> str:
+    """Kişiye özel özet: herkes kendi takvimini görür; sunucu bölümü yalnızca sahipte."""
     st = kv_json("ozet_state", {})
-    text = await ozet.build_summary(st, CALENDAR_ICS if full else "", WATCH_URLS,
-                                    include_server=full, extra=home_section())
+    text = await ozet.build_summary(st, get_calendar(chat_id), WATCH_URLS,
+                                    include_server=chat_id == TELEGRAM_CHAT_ID, extra=home_section())
     kv_set("ozet_state", json.dumps(st))  # kur geçmişi
     return text
 
@@ -459,10 +465,11 @@ async def summary_loop() -> None:
         now = datetime.now(TZ)
         if summary_due(now, kv_get("summary_last_sent")):
             kv_set("summary_last_sent", now.date().isoformat())
-            try:
-                await send(await summary_text(full=True), to=[TELEGRAM_CHAT_ID])
-            except Exception as e:
-                log.error("Sabah özeti hazırlanamadı (%s)", type(e).__name__)
+            for chat_id in recipients():           # sahip + üyeler, herkese kendi sürümü
+                try:
+                    await send(await summary_text(chat_id), to=[chat_id])
+                except Exception as e:
+                    log.error("Sabah özeti hazırlanamadı (%s, %s)", chat_id, type(e).__name__)
         await asyncio.sleep(20)
 
 
@@ -501,9 +508,79 @@ async def reply_quakes(chat_id: int) -> None:
 
 async def reply_summary(chat_id: int) -> None:
     try:
-        await send(await summary_text(full=chat_id == TELEGRAM_CHAT_ID), to=[chat_id])
+        await send(await summary_text(chat_id), to=[chat_id])
     except Exception as e:
         await send(f"Özet hazırlanamadı ({type(e).__name__}).", to=[chat_id])
+
+
+# ---------- Kişisel takvim ----------
+CAL_WAIT_SEC = 600
+awaiting_calendar: dict[int, float] = {}   # /takvim yazıp link bekleyenler -> son geçerlilik
+
+CAL_HOWTO = (
+    "📅 Takvimini bağlarsan sabah özetinde o günün etkinliklerini görürsün.\n\n"
+    "Google Takvim (bilgisayardan):\n"
+    "1) calendar.google.com → sol menüde takviminin yanındaki ⋮ → Ayarlar ve paylaşım\n"
+    "2) En altta \"iCal biçiminde gizli adres\" satırındaki linki kopyala\n"
+    "3) Linki bu sohbete gönder (10 dakika içinde)\n\n"
+    "iPhone/Outlook takvimlerinin .ics linki de olur. Link, takvimini parolasız okutur: "
+    "kimseyle paylaşma; ben kaydettikten sonra mesajını sohbetten silerim.\n"
+    "Kaldırmak için: /takvim sil"
+)
+
+
+def get_calendar(chat_id: int) -> str:
+    with db() as con:
+        row = con.execute("SELECT url FROM calendars WHERE chat_id = ?", (chat_id,)).fetchone()
+    return row["url"] if row else ""
+
+
+public_https_url = ozet.public_https_url
+
+
+async def delete_message(chat_id: int, message_id: int | None) -> bool:
+    if not message_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
+                             json={"chat_id": chat_id, "message_id": message_id})
+        return r.json().get("ok", False)
+    except Exception:
+        return False
+
+
+async def save_calendar(chat_id: int, url: str, message_id: int | None) -> None:
+    awaiting_calendar.pop(chat_id, None)
+    deleted = await delete_message(chat_id, message_id)   # gizli link sohbette kalmasın
+    url = url.strip().replace("webcal://", "https://", 1)
+    if not await asyncio.to_thread(public_https_url, url):
+        await send("Bu link olmadı: https ile başlayan, internetten erişilebilen bir takvim (.ics) adresi olmalı.", to=[chat_id])
+        return
+    try:
+        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "ev-nobetcisi/1.0"}) as c:
+            preview = await ozet.calendar(c, url, datetime.now(TZ))
+    except Exception as e:
+        await send(f"Takvimi okuyamadım ({type(e).__name__}). Linkin tamamını kopyaladığından emin ol.", to=[chat_id])
+        return
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO calendars (chat_id, url, added) VALUES (?, ?, ?)", (chat_id, url, time.time()))
+    note = "Linkin geçtiği mesajı sohbetten sildim." if deleted else "Güvenlik için linkin geçtiği mesajı sohbetten silmeni öneririm."
+    await send(f"✅ Takvimin bağlandı. Bundan sonra sabah özetinde görünecek.\n{note}\n\nBugün için önizleme:\n{preview}", to=[chat_id])
+
+
+async def handle_calendar(chat_id: int, msg: dict, arg: str) -> None:
+    arg = arg.strip()
+    if arg.lower() in ("sil", "kaldır", "kaldir"):
+        with db() as con:
+            n = con.execute("DELETE FROM calendars WHERE chat_id = ?", (chat_id,)).rowcount
+        await send("🗑 Takvim bağlantın kaldırıldı." if n else "Bağlı bir takvimin yok.", to=[chat_id])
+    elif arg:
+        await save_calendar(chat_id, arg, msg.get("message_id"))
+    else:
+        awaiting_calendar[chat_id] = time.time() + CAL_WAIT_SEC
+        status = "✅ Şu an bağlı bir takvimin var; yeni link gönderirsen değiştiririm.\n\n" if get_calendar(chat_id) else ""
+        await send(status + CAL_HOWTO, to=[chat_id])
 
 
 # ---------- Telegram komutları ----------
@@ -580,12 +657,14 @@ bad_attempts: list[float] = []        # hatalı /katil denemeleri (kaba kuvveti 
 
 HELP_MEMBER = (
     "/durum – evin canlı durumu\n/ozet – günlük özet (hava, kur, deprem)\n/deprem – son 24 saatin depremleri\n"
+    "/takvim – takvimini bağla (sabah özetinde görünür)\n"
     "/gecmis – son kesintiler\n/rapor – 7 ve 30 günlük istatistik\n/ayril – bildirimlerden çık\n\n"
-    "Türkiye'de deprem olunca otomatik haber veririm."
+    f"Her sabah {SEND_AT}'de özet gönderirim; Türkiye'de deprem olunca hemen haber veririm."
 )
 HELP_OWNER = (
     f"/durum – evin canlı durumu\n/ozet – sabah özetini şimdi gönder (her gün {SEND_AT}'de otomatik)\n"
-    "/deprem – son 24 saatin depremleri\n/gecmis – son kesintiler\n/rapor [gün] – kesinti istatistiği\n"
+    "/deprem – son 24 saatin depremleri\n/takvim – takvimini bağla/kaldır\n"
+    "/gecmis – son kesintiler\n/rapor [gün] – kesinti istatistiği\n"
     "/esik [dk] – alarm eşiği (şimdi/değiştir)\n/cihazlar – ağdaki cihazlar\n/cihaz SON4 isim – cihaza isim ver\n"
     "/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar"
 )
@@ -622,7 +701,10 @@ async def handle_join(chat_id: int, msg: dict, arg: str) -> None:
             "INSERT OR REPLACE INTO members (chat_id, name, added) VALUES (?, ?, ?)",
             (chat_id, name, now),
         )
-    await send(f"✅ Katıldın! Artık elektrik/internet kesintilerinden haberdar olacaksın.\n\n{HELP_MEMBER}", to=[chat_id])
+    await send(
+        "✅ Katıldın! Artık evdeki elektrik/internet kesintilerinden, depremlerden haberdar olacaksın; "
+        f"her sabah {SEND_AT}'de de özet gelecek.\n"
+        "📅 Özetinde kendi takvimini görmek istersen: /takvim\n\n" + HELP_MEMBER, to=[chat_id])
     await send(f"👤 {name} bildirimlere katıldı.", to=[TELEGRAM_CHAT_ID])
 
 
@@ -643,6 +725,8 @@ async def handle_command(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         spawn(reply_summary(chat_id))
     elif cmd == "/deprem":
         spawn(reply_quakes(chat_id))
+    elif cmd == "/takvim":
+        await handle_calendar(chat_id, msg, arg)
     elif cmd == "/rapor":
         try:
             days = int(arg.strip())
@@ -707,6 +791,7 @@ MEMBER_COMMANDS = [
     {"command": "durum", "description": "Canlı durum: internet, sıcaklık, Wi-Fi"},
     {"command": "ozet", "description": "Günlük özet: hava, kur, takvim, deprem"},
     {"command": "deprem", "description": "Son 24 saatin depremleri"},
+    {"command": "takvim", "description": "Takvimini bağla (sabah özetinde görünür)"},
     {"command": "gecmis", "description": "Son kesintiler"},
     {"command": "rapor", "description": "7 ve 30 günlük kesinti istatistiği"},
     {"command": "yardim", "description": "Komut listesi"},
@@ -752,7 +837,13 @@ async def telegram_loop() -> None:
                 msg = upd.get("message") or {}
                 chat = msg.get("chat", {})
                 text = (msg.get("text") or "").strip()
-                if chat.get("type") != "private" or not text.startswith("/"):
+                if chat.get("type") != "private":
+                    continue
+                if not text.startswith("/"):
+                    # /takvim sonrası gönderilen link
+                    if awaiting_calendar.get(chat["id"], 0) > time.time() and is_member(chat["id"]) \
+                            and text.lower().startswith(("https://", "webcal://")):
+                        spawn(save_calendar(chat["id"], text, msg.get("message_id")))
                     continue
                 head, _, arg = text.partition(" ")
                 await handle_command(chat["id"], msg, head.split("@")[0].lower(), arg)
@@ -770,7 +861,7 @@ async def lifespan(app: FastAPI):
     await set_commands()
     tasks = [asyncio.create_task(f()) for f in (monitor_loop, telegram_loop, summary_loop, quake_loop)]
     log.info("Nöbetçi başladı (eşik %s sn, panel %s, özet %s, takvim %s, %d site, deprem M%s)", timeout_sec(),
-             "açık" if PANEL_PASSWORD else "kapalı", SEND_AT, "açık" if CALENDAR_ICS else "kapalı",
+             "açık" if PANEL_PASSWORD else "kapalı", SEND_AT, "kişiye özel",
              len(WATCH_URLS), ozet.QUAKE_MIN_MAG)
     yield
     for t in tasks:

@@ -8,6 +8,7 @@ Hepsi anahtarsız, ücretsiz kaynaklar:
 - Sunucu: konteynerin gördüğü ana makine bilgileri + site kontrolleri
 """
 import asyncio
+import ipaddress
 import math
 import os
 import re
@@ -179,12 +180,36 @@ def quakes_section(qs: list[dict]) -> str:
 
 
 # ---------- Takvim ----------
+def public_https_url(url: str) -> bool:
+    """Yalnızca internetteki https adresleri: iç ağa/sunucunun kendisine istek attırılmasın."""
+    u = urlparse(url)
+    if u.scheme != "https" or not u.hostname:
+        return False
+    try:
+        addrs = {a[4][0] for a in socket.getaddrinfo(u.hostname, u.port or 443)}
+    except OSError:
+        return False
+    return bool(addrs) and all(ipaddress.ip_address(a).is_global for a in addrs)
+
+
+async def fetch_public(c: httpx.AsyncClient, url: str, max_redirects: int = 5) -> httpx.Response:
+    """Kullanıcının verdiği adresi getirir; her yönlendirme hedefini de ayrıca denetler."""
+    for _ in range(max_redirects + 1):
+        if not await asyncio.to_thread(public_https_url, url):
+            raise ValueError("izin verilmeyen adres")
+        r = await c.get(url, follow_redirects=False)
+        if not r.is_redirect:
+            r.raise_for_status()
+            return r
+        url = str(r.next_request.url)
+    raise ValueError("çok fazla yönlendirme")
+
+
 async def calendar(c: httpx.AsyncClient, url: str, day: datetime) -> str:
     import icalendar
     import recurring_ical_events
 
-    r = await c.get(url, follow_redirects=True)
-    r.raise_for_status()
+    r = await fetch_public(c, url)
     cal = icalendar.Calendar.from_ical(r.content)
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
     events = recurring_ical_events.of(cal).between(start, start + timedelta(days=1))

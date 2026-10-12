@@ -14,7 +14,6 @@ services:
       CITY: ${CITY:-Gebze}
       LAT: ${LAT:-40.8028}
       LON: ${LON:-29.4307}
-      CALENDAR_ICS: ${CALENDAR_ICS:-}
       WATCH_URLS: ${WATCH_URLS:-}
       QUAKE_MIN_MAG: ${QUAKE_MIN_MAG:-4.0}
     volumes:

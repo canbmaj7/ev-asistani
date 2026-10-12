@@ -1,9 +1,9 @@
-# Ev Nöbetçisi
+# Ev Nöbetçisi — Ev Asistanı
 
-Evdeki bir Raspberry Pi ve küçük bir sunucuyla çalışan, Telegram üzerinden konuşan **ev asistanı botu**:
+Evdeki bir Raspberry Pi ve küçük bir sunucuyla çalışan, Telegram üzerinden konuşan **ev asistanı botu** (Telegram'da adı *Ev Asistanı*):
 
 - ⚡ **Elektrik ve internet kesintisi** bildirimi (hangisi olduğunu ve süresini ayırt eder)
-- ☀️ **Sabah özeti**: her gün hava, döviz kuru, takvim, deprem, ev ve sunucu durumu tek mesajda
+- ☀️ **Sabah özeti**: her gün herkese hava, döviz kuru, **kişinin kendi takvimi**, deprem ve ev durumu tek mesajda (sahibe ayrıca sunucu durumu)
 - 🌍 **Deprem uyarısı**: Türkiye'de deprem olunca anında
 - 📡 **Ağ bekçisi**: ağa yeni bir cihaz bağlanınca haber
 - 📊 **Web paneli**: canlı durum, istatistik, grafik
@@ -18,8 +18,9 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 | Komut | Ne yapar | Kim |
 |---|---|---|
 | `/durum` | Pi'ye **anında** ölçüm yaptırır: internet gecikmesi, CPU sıcaklığı, Wi-Fi sinyali, boş RAM, açık kalma süresi | herkes |
-| `/ozet` | Sabah özetini şimdi gönderir (üyelere sunucu ve takvim bölümü olmadan) | herkes |
+| `/ozet` | Sabah özetini şimdi gönderir (sunucu bölümü yalnızca sahipte) | herkes |
 | `/deprem` | Son 24 saatte Türkiye'de M≥4 depremler | herkes |
+| `/takvim` | Kendi takvimini bağla (`/takvim sil` ile kaldır) | herkes |
 | `/gecmis` | Son 10 kesinti | herkes |
 | `/rapor [gün]` | Kesinti sayısı, toplam süre, en uzun kesinti, erişilebilirlik (varsayılan 7 ve 30 gün) | herkes |
 | `/esik [dk]` | Alarm eşiğini göster/değiştir (2-60 dk) | sahip |
@@ -38,18 +39,20 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 - `/durum` için Pi, sunucuya uzun bekleme (`POST /wait`) bağlantısı açık tutar; modemde port açmak gerekmez.
 
 ### Sabah özeti
-Her gün `SEND_AT` (varsayılan 08:00) saatinde sahibe gider:
+Her gün `SEND_AT` (varsayılan 08:00) saatinde **herkese kendi sürümü** gider: sahip ve üyeler aynı hava/kur/deprem/ev bilgisini alır, takvim kişiye özeldir, sunucu bölümü yalnızca sahibe gider.
 
 | Bölüm | Kaynak |
 |---|---|
 | Hava (`CITY`, `LAT`/`LON`) | [Open-Meteo](https://open-meteo.com), anahtarsız |
 | Kur (USD, EUR, GBP ve günlük değişim) | TCMB `today.xml` |
-| Takvim (isteğe bağlı) | Google Takvim "iCal biçiminde gizli adres" (`CALENDAR_ICS`) |
+| Takvim (kişiye özel, isteğe bağlı) | Kişinin `/takvim` ile bağladığı .ics linki (Google Takvim "iCal biçiminde gizli adres", iCloud, Outlook) |
 | Deprem (son 24 sa) | AFAD |
-| Sunucu | RAM/disk/yük + `WATCH_URLS` sitelerinin durumu, yanıt süresi, SSL bitişi |
+| Sunucu (yalnızca sahip) | RAM/disk/yük + `WATCH_URLS` sitelerinin durumu, yanıt süresi, SSL bitişi |
 | Ev | Pi'nin durumu ve son 24 saatin kesintileri |
 
 Sunucu o saatten en geç 2 saat sonra açılırsa o günün özetini telafi eder.
+
+**Takvim gizliliği:** Bot linki kişinin kendisinden ister ve yalnızca o kişinin özetinde kullanır. Linkin geçtiği mesaj kaydedildikten sonra sohbetten silinir. Yalnızca internetteki `https` adresleri kabul edilir (sunucunun iç ağına istek attırılamaz).
 
 ### Deprem uyarısı
 - AFAD 60 sn'de bir sorgulanır; Türkiye'de **M≥4.0** (`QUAKE_MIN_MAG`) yeni deprem olunca **tüm üyelere** anında mesaj gider: büyüklük, yer, saat, derinlik, konuma uzaklık, harita linki.
@@ -72,5 +75,5 @@ Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). İlk tarama
 
 ## Güvenlik
 - `/beat` ve `/wait` gizli bir token ister; Telegram komutları yalnızca sahip ve davetle katılan üyelerden kabul edilir.
-- Token'lar, sohbet kimliği, takvim adresi ve panel şifresi `.env` / sunucu ortam değişkenlerinde tutulur, repoya girmez.
+- Token'lar, sohbet kimliği ve panel şifresi `.env` / sunucu ortam değişkenlerinde, kişisel takvim linkleri botun veritabanında tutulur; hiçbiri repoya girmez.
 - Bot token'ı günlüklere yazılmaz (istisnalarda yalnızca hata türü loglanır).
