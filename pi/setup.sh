@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Pi üzerinde çalıştır: sudo bash setup-pi.sh <URL> <TOKEN>
+# Pi üzerinde çalıştır: sudo bash setup.sh <URL> <TOKEN>
 # İsteğe bağlı (sunucu çökerse Telegram'dan doğrudan uyarı için): aynı klasörde `extra.env`
 # dosyası oluştur; içine NOBETCI_TG_TOKEN=... ve NOBETCI_TG_CHAT=... yaz.
 set -euo pipefail
-URL="${1:?kullanım: setup-pi.sh <URL> <TOKEN>}"
-TOKEN="${2:?kullanım: setup-pi.sh <URL> <TOKEN>}"
+URL="${1:?kullanım: setup.sh <URL> <TOKEN>}"
+TOKEN="${2:?kullanım: setup.sh <URL> <TOKEN>}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 install -d /opt/nobetci
@@ -16,9 +16,9 @@ umask 077
   if [ -f "$DIR/extra.env" ]; then cat "$DIR/extra.env"; fi
 } > /etc/nobetci.env
 umask 022
-install -m 644 "$DIR/nobetci.service" /etc/systemd/system/nobetci.service
+install -m 644 "$DIR/systemd/nobetci.service" /etc/systemd/system/nobetci.service
 install -d /etc/systemd/system.conf.d
-install -m 644 "$DIR/watchdog.conf" /etc/systemd/system.conf.d/nobetci-watchdog.conf
+install -m 644 "$DIR/systemd/watchdog.conf" /etc/systemd/system.conf.d/nobetci-watchdog.conf
 systemctl daemon-reload
 systemctl daemon-reexec
 systemctl enable nobetci

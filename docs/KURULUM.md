@@ -24,7 +24,7 @@ Web paneli için `PANEL_PASSWORD` ortam değişkenini tanımla (boşsa panel kap
 1. Raspberry Pi Imager ile **Raspberry Pi OS Lite (64-bit)** yaz; ayarlarda ana bilgisayar adı, kullanıcı, SSH ve Wi-Fi/Ethernet tanımla.
 2. Pi'yi prize tak, SSH ile bağlan, `pi/` klasörünü kopyala.
 3. (İsteğe bağlı) Sunucu çökerse Telegram'dan haber vermesi için `pi/extra.env` dosyasına `NOBETCI_TG_TOKEN=...` ve `NOBETCI_TG_CHAT=...` yaz.
-4. `sudo bash setup-pi.sh https://<alan-adı>/beat <BEAT_TOKEN>`
+4. `sudo bash setup.sh https://<alan-adı>/beat <BEAT_TOKEN>`
 5. Her şey çalıştıktan sonra SD kartı korumak için bkz. [`PI-BAKIM.md`](PI-BAKIM.md).
 
 ## 4. Test (`/durum`, `/rapor` ve panel de denenebilir)

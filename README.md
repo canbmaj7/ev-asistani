@@ -70,6 +70,41 @@ Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). İlk tarama
 - Sunucu 5 dk'dan uzun yanıtsızsa Pi Telegram'a doğrudan yazar (`NOBETCI_TG_TOKEN`/`NOBETCI_TG_CHAT`)
 - SD kartı korumak için salt okunur kök dosya sistemi ([`docs/PI-BAKIM.md`](docs/PI-BAKIM.md))
 
+## Proje yapısı
+```
+pi/                       Raspberry Pi ajanı (yalnızca Python standart kütüphanesi)
+  heartbeat.py            nabız, internet ölçümü, ağ taraması, watchdog, sunucu izleme
+  setup.sh                kurulum (systemd servisi + watchdog)
+  systemd/                nobetci.service, watchdog.conf
+server/                   sunucu (Docker / Coolify)
+  asistan/
+    main.py               FastAPI uygulaması, arka plan döngüleri, /beat ve /wait
+    config.py             tüm ayarlar (ortam değişkenleri)
+    db.py                 SQLite şeması ve anahtar-değer deposu
+    telegram.py           Bot API: gönder, sil, menü, güncellemeler
+    commands.py           Telegram komutları ve yetkiler
+    home.py               Pi izleme: kesinti tespiti, canlı ölçüm
+    stats.py              kesinti geçmişi ve istatistik
+    devices.py            ağ bekçisi
+    summary.py            sabah özeti (kişiye özel)
+    quakes.py             anlık deprem uyarısı
+    calendars.py          kişisel takvim bağlama
+    members.py, invites.py  üyeler ve davet kodları
+    panel.py, static/     web paneli
+    sources/              dış veri: weather, rates, quakes, calendar, server
+  tests/                  pytest (internet gerektirenler: `pytest -m network`)
+docs/                     kurulum ve Pi bakımı
+```
+
+## Geliştirme
+```
+cd server
+pip install -r requirements-dev.txt
+pytest                # 40 test, internet gerekmez
+pytest -m network     # gerçek servislere bağlanan 5 test
+```
+Her push'ta GitHub Actions testleri çalıştırır.
+
 ## Kurulum
 [`docs/KURULUM.md`](docs/KURULUM.md). `main` dalına push yapıldığında Coolify otomatik olarak yeniden derleyip yayına alır (GitHub webhook).
 
