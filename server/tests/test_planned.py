@@ -83,3 +83,24 @@ def test_parse_isu():
         outages.parse_isu("<html>yeni tasarım</html>")
     with pytest.raises(ValueError):
         outages.parse_isu('<h3 class="uk-card-title">SU KESİNTİLERİ</h3><div>beklenmeyen içerik</div>')
+
+
+def test_tidy_names_dedupes_turkish_variants():
+    assert planned.tidy_names("ÖRNEK KÖY, CUMHURIYET, CUMHURİYET, MIMAR SINAN, MİMAR SİNAN") == "ÖRNEK KÖY, CUMHURİYET, MİMAR SİNAN"
+    assert planned.tidy_names("A,, B , A") == "A, B"
+
+
+def test_short_streets_never_cuts_mid_word():
+    streets = ", ".join(f"{2200 + i}. SK." for i in range(60)) + ", 2203. SK."
+    out = planned.short_streets(streets, limit=80)
+    assert out.endswith("sokak daha") and len(out) < 120
+    assert not out.split(" …")[0].endswith(("2", "SK")) or out.split(" …")[0].endswith("SK.")
+    assert planned.short_streets("1. SK., 2. SK., 1. SK.") == "1. SK., 2. SK."          # tekrarlar atıldı
+
+
+def test_alert_uses_tidy_text(monkeypatch):
+    o = el(9, TODAY, "ÖRNEK KÖY, CUMHURIYET, CUMHURİYET")
+    o["streets"] = ", ".join(f"{3000 + i}. SK." for i in range(80))
+    text = planned.alert(o, TODAY)
+    assert "CUMHURIYET" not in text and "CUMHURİYET" in text and "sokak daha" in text
+    assert max(len(line) for line in text.splitlines()) < 260

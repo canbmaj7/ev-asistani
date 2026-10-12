@@ -24,6 +24,36 @@ def affects_me(o: dict) -> bool:
     return norm(config.NEIGHBORHOOD) in norm(text)
 
 
+def tidy_names(text: str) -> str:
+    """SEDAŞ her adı hem Türkçe karakterli hem karaktersiz yazar (CUMHURIYET, CUMHURİYET): tekilleştir,
+    Türkçe karakterli olanı tercih et."""
+    best: dict[str, str] = {}
+    for name in (n.strip() for n in text.split(",")):
+        key = norm(name)
+        if not key:
+            continue
+        accents = lambda v: sum(ch in "İıŞşÇçÖöÜüĞğ" for ch in v)  # noqa: E731
+        if key not in best or accents(name) > accents(best[key]):
+            best[key] = name
+    return ", ".join(best.values())
+
+
+def short_streets(text: str, limit: int = 160) -> str:
+    """Uzun sokak listesini kelime ortasında kesmeden kısaltır: '… +14 sokak daha'."""
+    items, seen = [], set()
+    for st in (x.strip() for x in text.split(",")):
+        if st and norm(st) not in seen:
+            seen.add(norm(st))
+            items.append(st)
+    out, used = [], 0
+    for i, st in enumerate(items):
+        if used + len(st) + 2 > limit and out:
+            return ", ".join(out) + f" … +{len(items) - i} sokak daha"
+        out.append(st)
+        used += len(st) + 2
+    return ", ".join(out)
+
+
 def day_label(d: date, today: date) -> str:
     if d == today:
         return "Bugün"
@@ -36,9 +66,9 @@ def alert(o: dict, today: date) -> str:
     if o["kind"] == "elektrik":
         lines = [f"⚡ Planlı elektrik kesintisi · {config.NEIGHBORHOOD}",
                  f"📅 {day_label(o['day'], today)} {o['start']}–{o['end']}",
-                 f"📍 {o['areas'][:200]}"]
+                 f"📍 {tidy_names(o['areas'])[:200]}"]
         if o["streets"]:
-            lines.append(f"🛣 {o['streets'][:300]}")
+            lines.append(f"🛣 {short_streets(o['streets'])}")
     else:
         lines = [f"💧 Planlı su kesintisi · {config.DISTRICT.title()}", f"📍 {o['title'][:300]}"]
     lines.append(f"🔗 Kaynak: {o['url']}")
@@ -111,7 +141,7 @@ def section(items: list[dict] | None = None, days: int = 2) -> str:
     others = [o for o in el if o not in mine]
     limit = 4 if days == 2 else 15          # özet kısa kalsın; tamamı /kesinti'de
     for o in others[:limit]:
-        lines.append(f"⚡ {day_label(o['day'], today)} {o['start']}–{o['end']} · {o['areas'][:70]}")
+        lines.append(f"⚡ {day_label(o['day'], today)} {o['start']}–{o['end']} · {tidy_names(o['areas'])[:70]}")
     if len(others) > limit:
         lines.append(f"… ve {len(others) - limit} kesinti daha (/kesinti)")
     for o in su[:4]:

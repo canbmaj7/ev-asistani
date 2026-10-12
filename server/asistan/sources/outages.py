@@ -9,17 +9,13 @@ from .. import config
 
 SEDAS_PAGE = "https://www.sedas.com/Tr/SupplyContinuityUrl/PlannedView"
 SEDAS_API = "https://www.sedas.com/Home/PostPlannedListAll"
+SEDAS_OLD_API = "https://www.sedas.com/Home/PostPlannedOldListAll"
 ISU_PAGE = "https://www.isu.gov.tr/"
 
 
-async def sedas(c: httpx.AsyncClient, district: str | None = None) -> list[dict]:
-    """İlçedeki planlı elektrik kesintileri (yeniden eskiye değil, tarihe göre sıralı)."""
-    district = (district or config.DISTRICT).upper()
-    r = await c.post(SEDAS_API, data={"page": 1, "pageSize": 500, "City": "KOCAELİ", "District": district},
-                     headers={"X-Requested-With": "XMLHttpRequest"})
-    r.raise_for_status()
+def _parse_sedas(rows: list[dict], district: str) -> list[dict]:
     out = []
-    for x in r.json().get("Data", []):
+    for x in rows:
         if (x.get("ZILCE") or "").upper() != district:
             continue
         try:
@@ -35,6 +31,31 @@ async def sedas(c: httpx.AsyncClient, district: str | None = None) -> list[dict]
             "url": SEDAS_PAGE,
         })
     return sorted(out, key=lambda o: (o["day"], o["start"]))
+
+
+async def sedas(c: httpx.AsyncClient, district: str | None = None) -> list[dict]:
+    """İlçedeki güncel planlı elektrik kesintileri."""
+    district = (district or config.DISTRICT).upper()
+    r = await c.post(SEDAS_API, data={"page": 1, "pageSize": 500, "City": "KOCAELİ", "District": district},
+                     headers={"X-Requested-With": "XMLHttpRequest"})
+    r.raise_for_status()
+    return _parse_sedas(r.json().get("Data", []), district)
+
+
+async def sedas_history(c: httpx.AsyncClient, start: str, end: str, district: str | None = None) -> list[dict]:
+    """Geçmiş planlı kesintiler (SEDAŞ 'Geçmiş Kesintiler' sayfası); start/end 'YYYY-MM-DD'. Test ve analiz için."""
+    district = (district or config.DISTRICT).upper()
+    rows, page = [], 1
+    while True:
+        r = await c.post(SEDAS_OLD_API, data={"page": page, "pageSize": 500, "City": "KOCAELİ", "District": district,
+                                              "StartDate": start, "EndDate": end},
+                         headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        body = r.json()
+        rows += body.get("Data", [])
+        if not body.get("Data") or len(rows) >= body.get("Total", 0):
+            return _parse_sedas(rows, district)
+        page += 1
 
 
 def parse_isu(page: str) -> list[dict]:

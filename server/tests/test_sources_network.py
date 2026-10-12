@@ -63,3 +63,9 @@ def test_pharmacy():
 
 def test_air_quality():
     assert "Hava kalitesi" in with_client(weather.air_quality)
+
+
+def test_sedas_history_real_records():
+    hist = with_client(lambda c: outages.sedas_history(c, "2026-08-01", "2026-08-31"))
+    assert hist and all(o["kind"] == "elektrik" and o["start"] and o["areas"] for o in hist)
+    assert {o["day"].month for o in hist} == {8}
