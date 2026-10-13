@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.request
 
-AGENT_VERSION = 1            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
+AGENT_VERSION = 2            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
 AGENT_STARTED = int(time.time())
 
 URL = os.environ["NOBETCI_URL"]          # örn. https://<alan-adı>/beat
