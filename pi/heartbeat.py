@@ -318,6 +318,27 @@ def nightly_speedtest() -> None:
 
 
 # ---------- Nabız ----------
+def wifi_ssid() -> str | None:
+    """Bağlı olunan Wi-Fi ağının adı (NetworkManager)."""
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            if line.startswith("yes:"):
+                return line[4:].replace("\\:", ":")[:40] or None
+    except Exception:
+        pass
+    return None
+
+
+def own_ip() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("1.1.1.1", 80))          # paket gönderilmez; yalnızca çıkış arayüzü seçilir
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
 def collect_info(fresh: bool) -> dict:
     """Pi'nin anlık durumu. fresh=True ise interneti de yeniden ölçer."""
     global last_latency
@@ -339,6 +360,7 @@ def collect_info(fresh: bool) -> dict:
                 info["mem_mb"] = int(line.split()[1]) // 1024
     except Exception:
         pass
+    info["ssid"], info["ip"] = wifi_ssid(), own_ip()
     try:  # /proc/net/wireless: iface: status link level noise ...
         lines = read("/proc/net/wireless").splitlines()[2:]
         if lines:

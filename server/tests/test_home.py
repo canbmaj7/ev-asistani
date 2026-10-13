@@ -94,14 +94,15 @@ def test_live_status_roundtrip(client, outbox, monkeypatch):
                 r = await c.post("/wait", headers=H, timeout=10)
                 assert r.json()["ping"] is True
                 await c.post("/beat", headers=H, json={"boot_id": "a", "uptime": 4000, "live": True,
-                              "info": {"latency_ms": 23, "temp": 42.4, "load": 0.1, "mem_mb": 560, "wifi_dbm": -52}})
+                              "info": {"latency_ms": 23, "temp": 42.4, "load": 0.1, "mem_mb": 560, "wifi_dbm": -52,
+                                                                "ssid": "Keenetic-3815", "ip": "192.168.1.50"}})
             task = asyncio.create_task(pi())
             await asyncio.sleep(0.1)
             text = await home.live_status()
             await task
             return text
     text = run(go())
-    assert text.startswith("🟢 Her şey yolunda") and "23 ms" in text and "-52 dBm" in text and "1 sa 6 dk" in text
+    assert text.startswith("🟢 Her şey yolunda") and "23 ms" in text and "-52 dBm · Keenetic-3815 · 192.168.1.50" in text and "1 sa 6 dk" in text
 
 
 def test_live_status_timeout(monkeypatch):

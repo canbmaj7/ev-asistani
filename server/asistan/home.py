@@ -172,8 +172,10 @@ def fmt_info(info: dict) -> str:
         lines.append(f"🌡 CPU: {info['temp']}°C · yük {info.get('load', '?')}")
     if "mem_mb" in info:
         lines.append(f"💾 Boş RAM: {info['mem_mb']} MB")
-    if info.get("wifi_dbm") is not None:
-        lines.append(f"📶 Wi-Fi sinyali: {info['wifi_dbm']} dBm")
+    if info.get("wifi_dbm") is not None or info.get("ssid"):
+        net = f" · {info['ssid']}" if info.get("ssid") else ""
+        dbm = f"{info['wifi_dbm']} dBm" if info.get("wifi_dbm") is not None else "?"
+        lines.append(f"📶 Wi-Fi sinyali: {dbm}{net}" + (f" · {info['ip']}" if info.get("ip") else ""))
     return "\n".join(lines)
 
 
