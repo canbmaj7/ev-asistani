@@ -1,4 +1,5 @@
 """Planlı kesintiler: SEDAŞ (elektrik) ve İSU (su)."""
+import hashlib
 import html
 import re
 from datetime import datetime
@@ -6,6 +7,7 @@ from datetime import datetime
 import httpx
 
 from .. import config
+from ..util import norm
 
 SEDAS_PAGE = "https://www.sedas.com/Tr/SupplyContinuityUrl/PlannedView"
 SEDAS_API = "https://www.sedas.com/Home/PostPlannedListAll"
@@ -58,21 +60,36 @@ async def sedas_history(c: httpx.AsyncClient, start: str, end: str, district: st
         page += 1
 
 
+def _text(fragment: str) -> str:
+    """HTML parçasını düz metne çevirir (etiketler atılır, boşluklar sadeleşir)."""
+    t = re.sub(r"<script.*?</script>|<style.*?</style>", " ", fragment, flags=re.S)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", t))).strip()
+
+
 def parse_isu(page: str) -> list[dict]:
-    """İSU ana sayfasındaki 'SU KESİNTİLERİ' kartı: her kesinti bir detay bağlantısı."""
-    s = html.unescape(page)
-    i = s.find("SU KESİNTİLERİ")
-    if i < 0:
-        raise ValueError("İSU sayfa yapısı değişmiş")
-    card = s[i:i + 20000]
-    card = card[:card.find('uk-card-title', 50)] if card.find('uk-card-title', 50) > 0 else card
+    """İSU ana sayfasındaki 'SU KESİNTİLERİ' kaydırıcısı (#interruption-slider): her <li> bir kesinti.
+
+    İçerik serbest metin (editörden gelen <font> etiketleri), bu yüzden alanlara ayrılmaz; tam metin saklanır
+    ve mahalle metinde aranır. Sayfa yapısı tanınmazsa sessizce "kesinti yok" denmez, hata verilir.
+    """
+    start = page.find('id="interruption-slider"')
+    empty = re.search(r'id="NoInterruptionPanel"[^>]*>(.*?)</div>', page, re.S)
+    if start < 0 and not empty:
+        raise ValueError("İSU sayfa yapısı değişmiş (kesinti bölümü bulunamadı)")
     out = []
-    for href, title in re.findall(r'href="([^"]*sukesintileri/detay\.aspx\?Id=(?:\d+))"[^>]*>(.*?)</a>', card, re.S):
-        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", title)).strip()
-        out.append({"id": "isu-" + href.split("Id=")[-1], "kind": "su", "title": title,
-                    "url": href if href.startswith("http") else "https://www.isu.gov.tr" + ("" if href.startswith("/") else "/") + href})
-    if not out and "bulunmamaktadır" not in card:
-        raise ValueError("İSU kesinti kartı okunamadı (sayfa yapısı değişmiş olabilir)")
+    if start >= 0:
+        end = page.find("</ul>", start)
+        for li in re.findall(r"<li\b[^>]*>(.*?)</li>", page[start:end if end > 0 else None], re.S):
+            text = _text(li)
+            if not text:
+                continue
+            href = re.search(r'href="([^"#][^"]*)"', li)
+            link = href.group(1) if href else ""
+            url = link if link.startswith("http") else (ISU_PAGE.rstrip("/") + "/" + link.lstrip("/")) if link else ISU_PAGE
+            out.append({"id": "isu-" + hashlib.sha1(norm(text).encode()).hexdigest()[:12], "kind": "su",
+                        "title": text, "url": url})
+    if not out and empty and "bulunmamaktadır" not in _text(empty.group(1)):
+        raise ValueError("İSU kesinti bölümü okunamadı (beklenen 'kesinti yok' metni yok)")
     return out
 
 
@@ -85,5 +102,4 @@ async def isu(c: httpx.AsyncClient) -> list[dict]:
 async def isu_detail_text(c: httpx.AsyncClient, url: str) -> str:
     r = await c.get(url, follow_redirects=True)
     r.raise_for_status()
-    t = re.sub(r"<script.*?</script>|<style.*?</style>", " ", r.text, flags=re.S)
-    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", t))).strip()
+    return _text(r.text)

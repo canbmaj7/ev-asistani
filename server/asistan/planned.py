@@ -70,30 +70,29 @@ def alert(o: dict, today: date) -> str:
         if o["streets"]:
             lines.append(f"🛣 {short_streets(o['streets'])}")
     else:
-        lines = [f"💧 Planlı su kesintisi · {config.DISTRICT.title()}", f"📍 {o['title'][:300]}"]
+        lines = [f"💧 Su kesintisi duyurusu · {config.DISTRICT.title()}", f"📍 {o['title'][:500]}"]
     lines.append(f"🔗 Kaynak: {o['url']}")
     return "\n".join(lines)
 
 
+def relevant_su(o: dict) -> bool:
+    """İSU Kocaeli'nin tamamını duyurur: yalnızca ilçemizi ya da mahallemizi anan metinler ilgilendirir."""
+    return norm(config.DISTRICT) in norm(o["title"]) or affects_me(o)
+
+
 async def fetch_all() -> list[dict]:
-    """Elektrik + ilçedeki su kesintileri. Birinin hatası diğerini engellemez."""
+    """Elektrik + ilçeyi ilgilendiren su kesintileri. Birinin hatası diğerini engellemez."""
     async with client(25) as c:
         el, su = await asyncio.gather(src.sedas(c), src.isu(c), return_exceptions=True)
-        result = []
-        if isinstance(el, Exception):
-            log.error("SEDAŞ okunamadı (%s)", type(el).__name__)
-        else:
-            result += el
-        if isinstance(su, Exception):
-            log.error("İSU okunamadı (%s)", type(su).__name__)
-        else:
-            for o in su:
-                if norm(config.DISTRICT) in norm(o["title"]):
-                    try:   # mahalle adı başlıkta yoksa detay sayfasında olabilir
-                        o["detail"] = await src.isu_detail_text(c, o["url"])
-                    except Exception:
-                        o["detail"] = ""
-                    result.append(o)
+    result = []
+    if isinstance(el, Exception):
+        log.error("SEDAŞ okunamadı (%s)", type(el).__name__)
+    else:
+        result += el
+    if isinstance(su, Exception):
+        log.error("İSU okunamadı (%s)", type(su).__name__)
+    else:
+        result += [o for o in su if relevant_su(o)]
     return result
 
 
@@ -145,7 +144,7 @@ def section(items: list[dict] | None = None, days: int = 2) -> str:
     if len(others) > limit:
         lines.append(f"… ve {len(others) - limit} kesinti daha (/kesinti)")
     for o in su[:4]:
-        lines.append(f"💧 {('⚠️ ' if affects_me(o) else '')}{o['title'][:90]}")
+        lines.append(f"💧 {('⚠️ ' if affects_me(o) else '')}{o['title'][:160]}")
     if not mine and config.NEIGHBORHOOD:
         lines.append(f"✅ {config.NEIGHBORHOOD} etkilenmiyor.")
     return "\n".join(lines)

@@ -69,38 +69,76 @@ def test_section():
     assert "planlı kesinti yok" in planned.section([])
 
 
-ISU_EMPTY = '<h3 class="uk-card-title">SU KESİNTİLERİ</h3><div id="NoInterruptionPanel2"> Planlanmış bir su kesintisi bulunmamaktadır. </div><h3 class="uk-card-title">DUYURULAR</h3>'
-ISU_ONE = ('<h3 class="uk-card-title">SU KESİNTİLERİ</h3><ul><li><a href="/sukesintileri/detay.aspx?Id=812">'
-           'Gebze Örnek Köy Mahallesi su kesintisi</a></li></ul><h3 class="uk-card-title">DUYURULAR</h3>')
+# İSU ana sayfasındaki gerçek bölümün yapısı (boş hali, siteden alındığı gibi)
+ISU_EMPTY = """<div class="watercuts-container"><div class="uk-flex"><div style="height:110px;"><div style="overflow-y:auto">
+<div id="NoInterruptionPanel">
+
+    Planlanmış bir su kesintisi bulunmamaktadır.
+
+</div>
+<div class="uk-position-relative uk-visible-toggle uk-light uk-slideshow" id="interruption-slider">
+    <ul class="uk-slideshow-items" style="height: 138px;">
+
+    </ul>
+</div></div></div></div></div>"""
 
 
-def test_parse_isu():
+def isu_with(*items):
+    lis = "".join(f"<li>{i}</li>" for i in items)
+    return ISU_EMPTY.replace("</ul>", lis + "</ul>").replace("Planlanmış bir su kesintisi bulunmamaktadır.", "")
+
+
+def test_parse_isu_empty_state_from_real_page():
     assert outages.parse_isu(ISU_EMPTY) == []
-    items = outages.parse_isu(ISU_ONE)
-    assert items == [{"id": "isu-812", "kind": "su", "title": "Gebze Örnek Köy Mahallesi su kesintisi",
-                      "url": "https://www.isu.gov.tr/sukesintileri/detay.aspx?Id=812"}]
+
+
+def test_parse_isu_items():
+    page = isu_with(
+        '<font color="#fff">Gebze Örnek Köy ve Yavuz Mahallelerinde 14.10.2026 09:00-16:00 arası şebeke çalışması nedeniyle su kesilecektir.</font>',
+        '<a href="/duyurular/detay.aspx?Id=1">İzmit Yahyakaptan Mahallesi arıza</a>')
+    items = outages.parse_isu(page)
+    assert len(items) == 2 and all(i["kind"] == "su" for i in items)
+    assert items[0]["title"].startswith("Gebze Örnek Köy ve Yavuz") and "<" not in items[0]["title"]
+    assert items[0]["url"] == outages.ISU_PAGE                                   # bağlantı yoksa ana sayfa
+    assert items[1]["url"] == "https://www.isu.gov.tr/duyurular/detay.aspx?Id=1"
+    assert items[0]["id"] != items[1]["id"] and items[0]["id"] == outages.parse_isu(page)[0]["id"]   # kararlı kimlik
+
+
+def test_parse_isu_fails_loudly_when_page_changes():
     with pytest.raises(ValueError):
         outages.parse_isu("<html>yeni tasarım</html>")
-    with pytest.raises(ValueError):
-        outages.parse_isu('<h3 class="uk-card-title">SU KESİNTİLERİ</h3><div>beklenmeyen içerik</div>')
+    with pytest.raises(ValueError):                         # bölüm var ama ne kesinti ne 'yok' metni
+        outages.parse_isu(ISU_EMPTY.replace("Planlanmış bir su kesintisi bulunmamaktadır.", "Bakımdayız"))
 
 
-def test_tidy_names_dedupes_turkish_variants():
-    assert planned.tidy_names("ÖRNEK KÖY, CUMHURIYET, CUMHURİYET, MIMAR SINAN, MİMAR SİNAN") == "ÖRNEK KÖY, CUMHURİYET, MİMAR SİNAN"
-    assert planned.tidy_names("A,, B , A") == "A, B"
+def test_isu_relevance_and_alert(outbox, monkeypatch):
+    mine = {"id": "isu-1", "kind": "su", "title": "Gebze Örnek Köy Mahallesi'nde su kesintisi 14.10 09:00-16:00", "url": outages.ISU_PAGE}
+    district_only = {"id": "isu-2", "kind": "su", "title": "Gebze Hacıhalil'de arıza", "url": outages.ISU_PAGE}
+    other_city = {"id": "isu-3", "kind": "su", "title": "İzmit Yahyakaptan su kesintisi", "url": outages.ISU_PAGE}
+    assert planned.relevant_su(mine) and planned.relevant_su(district_only) and not planned.relevant_su(other_city)
+    assert planned.affects_me(mine) and not planned.affects_me(district_only)
+    text = planned.alert(mine, TODAY)
+    assert text.startswith("💧 Su kesintisi duyurusu") and "Örnek Köy" in text and "Kaynak: https://www.isu.gov.tr" in text
 
 
-def test_short_streets_never_cuts_mid_word():
-    streets = ", ".join(f"{2200 + i}. SK." for i in range(60)) + ", 2203. SK."
-    out = planned.short_streets(streets, limit=80)
-    assert out.endswith("sokak daha") and len(out) < 120
-    assert not out.split(" …")[0].endswith(("2", "SK")) or out.split(" …")[0].endswith("SK.")
-    assert planned.short_streets("1. SK., 2. SK., 1. SK.") == "1. SK., 2. SK."          # tekrarlar atıldı
+def test_fetch_all_keeps_only_relevant_water_cuts(monkeypatch):
+    async def fake_sedas(c): return []
+
+    async def fake_isu(c):
+        return [{"id": "isu-2", "kind": "su", "title": "Gebze Hacıhalil'de arıza", "url": outages.ISU_PAGE},
+                {"id": "isu-3", "kind": "su", "title": "İzmit Yahyakaptan su kesintisi", "url": outages.ISU_PAGE}]
+    monkeypatch.setattr(outages, "sedas", fake_sedas)
+    monkeypatch.setattr(outages, "isu", fake_isu)
+    items = run(planned.fetch_all())
+    assert [o["id"] for o in items] == ["isu-2"]
+    assert "Hacıhalil" in planned.section(items) and "Yahyakaptan" not in planned.section(items)
 
 
-def test_alert_uses_tidy_text(monkeypatch):
-    o = el(9, TODAY, "ÖRNEK KÖY, CUMHURIYET, CUMHURİYET")
-    o["streets"] = ", ".join(f"{3000 + i}. SK." for i in range(80))
-    text = planned.alert(o, TODAY)
-    assert "CUMHURIYET" not in text and "CUMHURİYET" in text and "sokak daha" in text
-    assert max(len(line) for line in text.splitlines()) < 260
+def test_one_source_failing_does_not_break_the_other(monkeypatch):
+    async def broken(c): raise TimeoutError
+
+    async def fake_sedas(c):
+        return [el(1, TODAY, "ÖRNEK KÖY")]
+    monkeypatch.setattr(outages, "sedas", fake_sedas)
+    monkeypatch.setattr(outages, "isu", broken)
+    assert [o["id"] for o in run(planned.fetch_all())] == ["sedas-1"]

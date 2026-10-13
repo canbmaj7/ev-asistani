@@ -74,7 +74,7 @@ Sunucu o saatten en geç 2 saat sonra açılırsa o günün özetini telafi eder
 - Kıyıdan 100 km'den uzak deniz depremleri elenir (`QUAKE_MAX_OFFSHORE_KM`). AFAD tarihleri UTC'dir, yerel saate çevrilir.
 
 ### Planlı kesintiler
-SEDAŞ'ın planlı kesinti listesi (`DISTRICT` ilçesi) ve İSU'nun su kesintileri 3 saatte bir okunur. `NEIGHBORHOOD` mahallesini etkileyen **yeni** bir kesinti görülünce herkese mesaj gider (tarih, saat, sokaklar, kaynak bağlantısı). Mahalle adları Türkçe karakter ve yazım farklarına duyarsız eşleştirilir. `NEIGHBORHOOD` boşsa anlık uyarı gönderilmez, özet yine ilçeyi listeler.
+SEDAŞ'ın planlı kesinti listesi (`DISTRICT` ilçesi) ve İSU ana sayfasındaki "Su kesintileri" kaydırıcısı 3 saatte bir okunur. SEDAŞ yapılandırılmış veri verir (mahalle, sokak, saat); İSU ise serbest metin duyurur ve tüm Kocaeli'yi kapsar, bu yüzden yalnızca ilçeyi ya da mahalleyi anan duyurular alınır, mahalle metinde aranır. İSU sayfa yapısı değişirse sessizce "kesinti yok" denmez, hata günlüğe yazılır. `NEIGHBORHOOD` mahallesini etkileyen **yeni** bir kesinti görülünce herkese mesaj gider (tarih, saat, sokaklar, kaynak bağlantısı). Mahalle adları Türkçe karakter ve yazım farklarına duyarsız eşleştirilir. `NEIGHBORHOOD` boşsa anlık uyarı gönderilmez, özet yine ilçeyi listeler.
 
 ### Anlık hava uyarıları
 Open-Meteo 15 dakikada bir sorgulanır: 1 saat içinde başlayacak yağmur, ≥60 km/sa rüzgâr hamlesi, gök gürültülü fırtına, 6 saatte ≥20 mm yağış, akşam saatlerinde gece don tahmini. Her uyarının tekrar süresi vardır; 23:00–07:00 arası yalnızca ciddi olanlar (≥80 km/sa rüzgâr, sağanak) gönderilir.
