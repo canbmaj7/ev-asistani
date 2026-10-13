@@ -10,6 +10,8 @@ from .db import kv_get, kv_set
 from .util import fmt_dur, fmt_time
 
 STARTED_AT = time.time()
+FLAKY_WINDOW = 1800     # sn: bu sürede çok sayıda kısa kopma olursa mesajlar tek özete iner
+FLAKY_AFTER = 3         # ilk 3 kopma ayrı ayrı bildirilir
 state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None, "info": {}}
 ping_event = asyncio.Event()       # /durum istendi: Pi'ye "şimdi ölç" sinyali (long-poll kanalı)
 live_waiters: list = []            # canlı yanıtı bekleyen istekler
@@ -68,8 +70,15 @@ async def handle_beat(b: Beat) -> None:
         for ev in b.net_events:
             ended = now - ev.ago
             started = ended - ev.dur
+            recent = stats.recent_count("internet", now - FLAKY_WINDOW)
             stats.record_outage("internet", started, ended)
-            await tg.send(f"🌐 Kısa internet kesintisi oldu\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ev.dur)}")
+            if recent < FLAKY_AFTER:
+                await tg.send(f"🌐 Kısa internet kesintisi oldu\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ev.dur)}")
+            elif now - float(kv_get("flaky_msg_at") or 0) > FLAKY_WINDOW:
+                # Bağlantı dengesiz: her kopma için ayrı mesaj yerine yarım saatte en çok bir özet
+                kv_set("flaky_msg_at", now)
+                await tg.send(f"🌐 Bağlantı dengesiz: son {FLAKY_WINDOW // 60} dakikada {recent + 1} kısa internet kopması oldu.\n"
+                              "Sorun sürerken tek tek bildirmeyeceğim; kayıtlar /gecmis ve panelde.")
 
     if quiet:
         pass
@@ -97,7 +106,7 @@ async def handle_beat(b: Beat) -> None:
                 f.set_result(True)
         live_waiters.clear()
     if b.devices is not None:
-        await devices.handle_scan(b.devices, now)
+        await devices.handle_scan(b.devices, now, net=str((b.info or {}).get("ssid") or state["info"].get("ssid") or ""))
     if b.speedtest:
         speed.record(b.speedtest, b.speedtest.get("trigger", "gece"))
         for f in speed_waiters:

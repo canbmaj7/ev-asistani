@@ -6,8 +6,8 @@ from conftest import OWNER, run
 from asistan import devices
 
 
-def scan(*macs):
-    run(devices.handle_scan([{"mac": m, "ip": f"192.168.1.{10 + i}", "host": ""} for i, m in enumerate(macs)], time.time()))
+def scan(*macs, net=""):
+    run(devices.handle_scan([{"mac": m, "ip": f"192.168.1.{10 + i}", "host": ""} for i, m in enumerate(macs)], time.time(), net=net))
 
 
 def test_baseline_then_new_device(outbox):
@@ -35,3 +35,33 @@ def test_rename(outbox):
     assert "yok" in devices.rename("9999 x")
     assert "Kullanım" in devices.rename("0009")
     assert "Salon TV" in devices.text() and "3 çevrimiçi" in devices.text()
+
+
+def test_network_change_starts_a_silent_new_baseline(outbox):
+    """Pi başka Wi-Fi'ye taşınınca yeni ağdaki cihazlar tek tek 'yeni cihaz' diye bildirilmez."""
+    scan("aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02", net="TP-LINK")
+    outbox.clear()
+    scan("aa:bb:cc:00:00:01", "de:ad:be:ef:00:10", "de:ad:be:ef:00:11", net="Keenetic")
+    assert len(outbox) == 1 and "(Keenetic) 3 cihaz" in outbox.last() and "başlangıç" in outbox.last()
+    outbox.clear()
+    scan("aa:bb:cc:00:00:01", "de:ad:be:ef:00:10", "de:ad:be:ef:00:11", net="Keenetic")
+    assert not outbox
+    scan("aa:bb:cc:00:00:01", "de:ad:be:ef:00:10", "ff:00:00:00:00:99", net="Keenetic")
+    assert len(outbox) == 1 and "yeni bir cihaz" in outbox.last()           # yeni ağda gerçekten yeni olan hâlâ bildirilir
+
+
+def test_migration_adds_net_column(tmp_path, monkeypatch):
+    import sqlite3
+    from asistan import config, db
+    path = str(tmp_path / "eski.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE devices (mac TEXT PRIMARY KEY, ip TEXT, host TEXT, name TEXT NOT NULL DEFAULT '', "
+                "first_seen REAL NOT NULL, last_seen REAL NOT NULL)")
+    con.execute("INSERT INTO devices VALUES ('aa:bb:cc:00:00:01', '1.2.3.4', '', 'TV', 1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(config, "DB_PATH", path)
+    db.init_db()
+    with db.db() as c:
+        row = c.execute("SELECT name, net FROM devices").fetchone()
+    assert (row["name"], row["net"]) == ("TV", "")                          # eski veri korunur

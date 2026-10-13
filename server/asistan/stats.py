@@ -12,6 +12,11 @@ def record_outage(kind: str, started: float, ended: float) -> None:
         con.execute("INSERT INTO outages (kind, started, ended) VALUES (?, ?, ?)", (kind, started, ended))
 
 
+def recent_count(kind: str, since: float) -> int:
+    with db() as con:
+        return con.execute("SELECT COUNT(*) FROM outages WHERE kind = ? AND started > ?", (kind, since)).fetchone()[0]
+
+
 def outage_stats(days: int) -> dict:
     now = time.time()
     lo = now - days * 86400

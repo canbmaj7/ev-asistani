@@ -46,7 +46,7 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 ### Kesinti izleme
 - Pi, sunucuya 30 sn'de bir nabız yollar. Nabız kesilirse (varsayılan 2 dk) sunucu uyarır.
 - Geri gelince Pi'nin `boot_id`'sine bakılır: değiştiyse **elektrik**, değişmediyse **internet** kesintisidir. Elektrik kesintisinin süresine Pi'nin açılış süresi katılmaz.
-- Pi interneti kendisi de ölçer (3 bağımsız hedef); kısa kopmaları bağlantı gelince bildirir.
+- Pi interneti kendisi de ölçer (3 bağımsız hedef); kısa kopmaları bağlantı gelince bildirir. Bağlantı dengesizse (zayıf Wi-Fi gibi) ilk 3 kopma ayrı, sonrası yarım saatte en çok **tek özet** mesajıyla bildirilir; kayıtlar eksiksiz tutulur.
 - `/durum` için Pi, sunucuya uzun bekleme (`POST /wait`) bağlantısı açık tutar; modemde port açmak gerekmez.
 
 ### Sabah özeti
@@ -83,7 +83,7 @@ Open-Meteo 15 dakikada bir sorgulanır: 1 saat içinde başlayacak yağmur, ≥6
 Pi her gece `NOBETCI_SPEEDTEST_AT` (03:30) saatinde Cloudflare'in hız testi uç noktalarıyla indirme/yükleme/ping ölçer (ek yazılım gerekmez, ~30 MB veri); `/hiz test` ile istenince de ölçer. Sonuçlar sunucuda saklanır: `/hiz`, sabah özeti ve panelde grafik.
 
 ### Ağ bekçisi
-Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). İlk tarama başlangıç listesi sayılır; sonradan görülen cihaz için sahibe bildirim gider. Not: telefonların "özel Wi-Fi adresi" özelliği aynı cihazı farklı MAC ile gösterebilir.
+Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). **Her Wi-Fi ağı için** ilk tarama başlangıç listesi sayılır (Pi başka ağa taşınınca cihaz yağmuru olmaz); sonradan görülen cihaz için sahibe bildirim gider. Not: telefonların "özel Wi-Fi adresi" özelliği aynı cihazı farklı MAC ile gösterebilir.
 
 ### Web paneli
 `https://<alan-adı>/panel` (HTTP Basic, şifre `PANEL_PASSWORD`): canlı durum, 7/30 günlük istatistik, günlük kesinti grafiği, kesinti geçmişi, ağ cihazları. Şifre tanımlı değilse panel kapalıdır.

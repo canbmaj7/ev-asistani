@@ -41,6 +41,9 @@ def init_db() -> None:
     os.makedirs(os.path.dirname(config.DB_PATH) or ".", exist_ok=True)
     with db() as con:
         con.executescript(SCHEMA)
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(devices)")}
+        if "net" not in cols:      # eski sürümden geçiş: cihazlar hangi Wi-Fi ağında görüldü
+            con.execute("ALTER TABLE devices ADD COLUMN net TEXT NOT NULL DEFAULT ''")
 
 
 def kv_get(k: str):

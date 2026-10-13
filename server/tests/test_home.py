@@ -115,3 +115,16 @@ def test_live_status_timeout(monkeypatch):
 def test_live_status_when_down():
     home.state.update(last_beat=time.time() - 300, boot_id="a", down_since=time.time() - 300)
     assert run(home.live_status()).startswith("🔴")
+
+
+def test_flaky_connection_collapses_into_one_summary(outbox):
+    """Zayıf Wi-Fi'de dakikada bir kopma: ilk 3'ü ayrı mesaj, sonrası yarım saatte en çok bir özet; kayıt eksiksiz."""
+    home.state.update(last_beat=time.time() - 30, boot_id="a")
+    for _ in range(8):
+        run(home.handle_beat(home.Beat(boot_id="a", uptime=500, net_events=[{"dur": 40, "ago": 5}])))
+    texts = outbox.texts()
+    assert sum("Kısa internet kesintisi" in t for t in texts) == 3
+    assert sum("Bağlantı dengesiz" in t for t in texts) == 1 and len(texts) == 4
+    from asistan.db import db
+    with db() as con:
+        assert con.execute("SELECT COUNT(*) FROM outages WHERE kind = 'internet'").fetchone()[0] == 8

@@ -10,8 +10,9 @@ from .util import clean
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 
 
-async def handle_scan(devs: list[dict], now: float) -> None:
-    """İlk taramayı başlangıç listesi sayar; sonradan görülen yeni MAC'leri bildirir."""
+async def handle_scan(devs: list[dict], now: float, net: str = "") -> None:
+    """Her Wi-Fi ağı için ilk tarama başlangıç listesi sayılır (ağ değişince yeni cihaz yağmuru olmaz);
+    sonradan o ağda görülen yeni MAC'ler bildirilir."""
     seen = {}
     for d in devs[:150]:
         mac = clean(d.get("mac")).lower()
@@ -20,19 +21,22 @@ async def handle_scan(devs: list[dict], now: float) -> None:
     if not seen:
         return
     with db() as con:
-        known = {r["mac"] for r in con.execute("SELECT mac FROM devices")}
+        known = {r["mac"] for r in con.execute("SELECT mac FROM devices WHERE net = ?", (net,))}
+        everyone = {r["mac"] for r in con.execute("SELECT mac FROM devices")}
         new = []
         for mac, (ip, host) in seen.items():
-            if mac in known:
-                con.execute("UPDATE devices SET ip = ?, host = COALESCE(NULLIF(?, ''), host), last_seen = ? WHERE mac = ?",
-                            (ip, host, now, mac))
+            if mac in everyone:
+                con.execute("UPDATE devices SET ip = ?, host = COALESCE(NULLIF(?, ''), host), last_seen = ?, net = ? WHERE mac = ?",
+                            (ip, host, now, net, mac))
             else:
-                con.execute("INSERT INTO devices (mac, ip, host, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
-                            (mac, ip, host, now, now))
+                con.execute("INSERT INTO devices (mac, ip, host, first_seen, last_seen, net) VALUES (?, ?, ?, ?, ?, ?)",
+                            (mac, ip, host, now, now, net))
+            if mac not in known:
                 new.append((mac, ip, host))
     if not known:
+        label = f" ({net})" if net else ""
         await tg.send(
-            f"📋 Ağda {len(seen)} cihaz bulundu ve başlangıç listesine kaydedildi.\n"
+            f"📋 Ağda{label} {len(seen)} cihaz bulundu ve başlangıç listesine kaydedildi.\n"
             "Bundan sonra listede olmayan yeni bir cihaz bağlanınca haber vereceğim.\n"
             "Liste: /cihazlar · İsim vermek için: /cihaz SON4 isim", to=[config.OWNER_ID])
         return
