@@ -5,12 +5,16 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/nobetci.env
-ExecStart=/usr/bin/python3 /opt/nobetci/heartbeat.py
+# Başlatıcı, ajanın en son imzalı sürümünü RAM'e (/run/nobetci) alıp çalıştırır; olmazsa diskteki yedekle devam eder
+ExecStart=/usr/bin/python3 /opt/nobetci/launcher.py
+RuntimeDirectory=nobetci
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 # Ajan her 10 sn'de systemd'ye "yaşıyorum" der; 120 sn sessiz kalırsa yeniden başlatılır
 NotifyAccess=main
 WatchdogSec=120
 Restart=always
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

@@ -54,6 +54,15 @@ async def wait(x_token: str = Header(default="")):
     return await home.wait_for_ping()
 
 
+@app.post("/pi/update")
+async def pi_update(x_token: str = Header(default="")):
+    """Pi ajanını güncellemeye zorlar (betikten): komutu kanala koyar, beklemeden döner."""
+    check_token(x_token)
+    home.pending_cmd["cmd"] = "update"
+    home.ping_event.set()
+    return {"ok": True}
+
+
 class Maintenance(BaseModel):
     minutes: float = 15
 

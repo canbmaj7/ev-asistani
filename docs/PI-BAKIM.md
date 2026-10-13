@@ -13,7 +13,10 @@ sudo reboot
 ```
 Kontrol: `raspi-config nonint get_overlay_now` → `0` ise overlay etkin.
 
-## Bir şeyi değiştirmek (ajanı güncellemek vb.)
+## Ajanı güncellemek
+`/pi_guncelle` (README'deki imzalı güncelleme): overlay'e dokunmadan, birkaç saniyede. Aşağıdaki yöntem yalnızca başlatıcı, systemd dosyaları, `release.pub` ve ağ ayarı gibi nadir değişenler için.
+
+## Bir şeyi değiştirmek (başlatıcı, systemd, ağ vb.)
 Overlay açıkken yaptığın değişiklikler yeniden başlatmada silinir. Kalıcı değişiklik için:
 ```
 sudo raspi-config nonint disable_overlayfs

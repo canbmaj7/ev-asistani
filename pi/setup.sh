@@ -8,7 +8,9 @@ TOKEN="${2:?kullanım: setup.sh <URL> <TOKEN>}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 install -d /opt/nobetci
-install -m 755 "$DIR/heartbeat.py" /opt/nobetci/heartbeat.py
+install -m 755 "$DIR/heartbeat.py" /opt/nobetci/heartbeat.py        # yedek sürüm (internet/imza sorununda)
+install -m 755 "$DIR/launcher.py" /opt/nobetci/launcher.py
+install -m 644 "$DIR/release.pub" /opt/nobetci/release.pub            # imza doğrulama (genel) anahtarı
 umask 077
 {
   echo "NOBETCI_URL=$URL"

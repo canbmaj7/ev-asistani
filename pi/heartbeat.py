@@ -8,6 +8,7 @@
 - Sunucu çökerse (Pi ve internet sağlamken) Telegram'dan doğrudan haber verir.
 - Ağdaki cihazları periyodik tarar, sonucu sunucuya iletir.
 - systemd watchdog'a "yaşıyorum" der; ajan donarsa systemd yeniden başlatır.
+- "update" komutunu alınca yeniden başlar; başlatıcı (launcher.py) en son İMZALI sürümü indirip çalıştırır.
 - Her gece (NOBETCI_SPEEDTEST_AT, varsayılan 03:30) ve sunucu isteyince internet hız testi yapar.
 
 Yalnızca standart kütüphane.
@@ -21,6 +22,9 @@ import subprocess
 import threading
 import time
 import urllib.request
+
+AGENT_VERSION = 1            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
+AGENT_STARTED = int(time.time())
 
 URL = os.environ["NOBETCI_URL"]          # örn. https://<alan-adı>/beat
 WAIT_URL = URL.rsplit("/", 1)[0] + "/wait"
@@ -361,6 +365,7 @@ def collect_info(fresh: bool) -> dict:
     except Exception:
         pass
     info["ssid"], info["ip"] = wifi_ssid(), own_ip()
+    info["agent"], info["agent_start"] = AGENT_VERSION, AGENT_STARTED
     try:  # /proc/net/wireless: iface: status link level noise ...
         lines = read("/proc/net/wireless").splitlines()[2:]
         if lines:
@@ -417,7 +422,10 @@ def listen() -> None:
         try:
             resp = post(WAIT_URL, {}, timeout=40)
             if resp.get("ping"):
-                if resp.get("cmd") == "speedtest":
+                if resp.get("cmd") == "update":
+                    log("güncelleme isteği alındı: yeniden başlatılıyor (başlatıcı yeni imzalı sürümü alacak)")
+                    os._exit(0)                  # systemd servisi yeniden başlatır → başlatıcı en son imzalı ajanı alır
+                elif resp.get("cmd") == "speedtest":
                     beat(live=True, speedtest=run_speedtest("elle"))
                 else:
                     beat(live=True)

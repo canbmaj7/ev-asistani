@@ -148,7 +148,8 @@ function render(d){
     kv(p, '⏱ Açık kalma', i.uptime != null ? fmtDur(i.uptime) : '—');
     kv(p, '🌡 CPU', i.temp != null ? `${i.temp} °C · yük ${i.load ?? '?'}` : '—');
     kv(p, '💾 Boş RAM', i.mem_mb != null ? `${i.mem_mb} MB` : '—');
-    kv(p, '📶 Wi-Fi', i.wifi_dbm != null ? `${i.wifi_dbm} dBm` : '—');
+    kv(p, '📶 Wi-Fi', i.wifi_dbm != null ? `${i.wifi_dbm} dBm` + (i.ssid ? ` · ${i.ssid}` : '') : '—');
+    kv(p, '🧩 Ajan sürümü', i.agent != null ? String(i.agent) : '—');
     kv(p, 'Alarm eşiği', `${d.timeout_sec/60} dk`);
     kv(p, 'Bildirim alan', `${d.members + 1} kişi`);
   });

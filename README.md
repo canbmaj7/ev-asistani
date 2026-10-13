@@ -32,6 +32,7 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 | `/ramazan` | Sahur/iftar hatırlatmasını aç/kapat (yalnızca Ramazan'da çalışır) | herkes |
 | `/hiz`, `/hiz test` | Hız testi kayıtları; şimdi ölç | herkes |
 | `/bakim [dk]` | Kesinti mesajlarını geçici sustur (Pi bakımı için) | sahip |
+| `/pi_guncelle` | Pi ajanını en son **imzalı** sürüme güncelle (~10-20 sn, yeniden başlatma yok) | sahip |
 | `/gecmis` | Son 10 kesinti | herkes |
 | `/rapor [gün]` | Kesinti sayısı, toplam süre, en uzun kesinti, erişilebilirlik (varsayılan 7 ve 30 gün) | herkes |
 | `/esik [dk]` | Alarm eşiğini göster/değiştir (2-60 dk) | sahip |
@@ -88,6 +89,17 @@ Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). **Her Wi-Fi
 ### Web paneli
 `https://<alan-adı>/panel` (HTTP Basic, şifre `PANEL_PASSWORD`): canlı durum, 7/30 günlük istatistik, günlük kesinti grafiği, kesinti geçmişi, ağ cihazları. Şifre tanımlı değilse panel kapalıdır.
 
+### Pi ajanını uzaktan güncelleme (imzalı)
+Pi'nin kök dosya sistemi salt okunur olduğundan ajan diske değil RAM'e indirilir. Pi'de kalıcı küçük bir **başlatıcı** (`pi/launcher.py`) vardır: her açılışta ve `/pi_guncelle` komutunda GitHub'daki en son `pi/heartbeat.py`'yi alır, **Ed25519 imzasını doğrular** ve ancak geçerliyse çalıştırır (doğrulama `openssl` ile; Pi'de yalnızca genel anahtar `pi/release.pub` bulunur). İmzasız/yanlış imzalı dosya, repoya ya da sunucuya erişen biri tarafından bile çalıştırılamaz; eski sürüme geri dönüş de reddedilir; internet ya da imza sorununda diskteki yedek sürümle devam edilir.
+
+Sürüm çıkarmak için (gizli anahtar yalnızca geliştiricinin bilgisayarında, `~/.ssh/evpi_release_ed25519.pem`):
+```
+scripts/release-agent.sh      # AGENT_VERSION'ı artırır, pi/heartbeat.py'yi imzalar
+git add pi && git commit && git push
+# Telegram'da /pi_guncelle  (ya da: curl -X POST -H "X-Token: $BEAT_TOKEN" https://<alan-adı>/pi/update)
+```
+CI, `pi/heartbeat.py` imzasının genel anahtarla tuttuğunu denetler; imzalamayı unutmak testi düşürür. Başlatıcının kendisi, systemd birimi ve `release.pub` değişirse Pi'de eski yöntem gerekir (`docs/PI-BAKIM.md`).
+
 ### Dayanıklılık
 - systemd watchdog (ajan 120 sn donarsa yeniden başlar), donanım watchdog'u (sistem donarsa Pi yeniden açılır)
 - İnternet 3 dk yoksa Wi-Fi yeniden bağlanma
@@ -97,7 +109,11 @@ Pi kendi ağını 5 dakikada bir tarar (ARP, ek yazılım gerekmez). **Her Wi-Fi
 ## Proje yapısı
 ```
 pi/                       Raspberry Pi ajanı (yalnızca Python standart kütüphanesi)
-  heartbeat.py            nabız, internet ölçümü, ağ taraması, watchdog, sunucu izleme
+  launcher.py             başlatıcı: en son imzalı ajanı alır, doğrular, çalıştırır
+  heartbeat.py(.sig)      ajan (nabız, ölçümler, tarama, watchdog) ve imzası
+  release.pub             imza doğrulama (genel) anahtarı
+  tests/                  başlatıcı ve imza testleri
+scripts/release-agent.sh  yeni ajan sürümü: sürümü artır + imzala
   setup.sh                kurulum (systemd servisi + watchdog)
   systemd/                nobetci.service, watchdog.conf
 server/                   sunucu (Docker / Coolify)

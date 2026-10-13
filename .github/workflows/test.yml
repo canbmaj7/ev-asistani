@@ -19,4 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m py_compile pi/heartbeat.py && bash -n pi/setup.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest==8.3.4
+      - run: python3 -m py_compile pi/heartbeat.py pi/launcher.py && bash -n pi/setup.sh scripts/release-agent.sh
+      # Başlatıcı testleri + pi/heartbeat.py'nin imzası genel anahtarla tutuyor mu (imzalamayı unutmayı yakalar)
+      - run: pytest pi/tests -q

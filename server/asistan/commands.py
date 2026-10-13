@@ -20,6 +20,7 @@ _AUTO = (f"\nOtomatik: her sabah {config.SEND_AT}'de özet; Türkiye'de deprem, 
 HELP_MEMBER = _COMMON + "/ayril – bildirimlerden çık\n" + _AUTO
 HELP_OWNER = _COMMON + (
     "/esik [dk] – alarm eşiği (şimdi/değiştir)\n/bakim [dk] – kesinti mesajlarını sustur\n"
+    "/pi-guncelle – Pi ajanını en son imzalı sürüme güncelle\n"
     "/cihazlar – ağdaki cihazlar\n/cihaz SON4 isim – cihaza isim ver\n"
     "/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar\n"
 ) + _AUTO
@@ -48,6 +49,7 @@ MEMBER_MENU = [
 OWNER_MENU = [c for c in MEMBER_MENU if c["command"] not in ("katil", "ayril")] + [
     {"command": "esik", "description": "Alarm eşiği: /esik 3 (dakika)"},
     {"command": "bakim", "description": "Kesinti mesajlarını sustur: /bakim 30"},
+    {"command": "pi_guncelle", "description": "Pi ajanını en son imzalı sürüme güncelle"},
     {"command": "cihazlar", "description": "Ağdaki cihazlar"},
     {"command": "cihaz", "description": "Cihaza isim ver: /cihaz SON4 isim"},
     {"command": "davet", "description": "Yeni üye için davet kodu üret"},
@@ -65,6 +67,19 @@ async def _speedtest(chat_id: int) -> None:
     r = await home.request_speedtest()
     await tg.send(f"📶 Hız testi: {speed.fmt(r)}\n🔗 Ölçüm: speed.cloudflare.com" if r
                   else "Pi hız testine yanıt vermedi (çevrimdışı ya da bağlantı çok yavaş olabilir).", to=[chat_id])
+
+
+async def _update_agent(chat_id: int) -> None:
+    await tg.send("⏳ Pi ajanı güncelleniyor (en son imzalı sürüm alınır, ~10-20 sn)…", to=[chat_id])
+    r = await home.request_update()
+    if not r:
+        await tg.send(f"⚠️ {config.UPDATE_TIMEOUT} sn içinde Pi'den yanıt gelmedi. Yeniden başlıyor olabilir; /durum ile bak. "
+                      "Geçersiz imzalı bir sürüm yayınlandıysa Pi eski sürümle devam eder.", to=[chat_id])
+        return
+    before, after = r
+    old, new = before.get("agent"), after.get("agent")
+    note = "yeni sürüm yoktu, aynı sürümle yeniden başladı" if old == new else f"{old} → {new}"
+    await tg.send(f"✅ Pi ajanı yeniden başladı · sürüm {note}\n{home.fmt_info(after)}", to=[chat_id])
 
 
 async def _maintenance(chat_id: int, arg: str) -> None:
@@ -147,6 +162,8 @@ async def handle(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         await _threshold(chat_id, arg)
     elif cmd == "/bakim":
         await _maintenance(chat_id, arg)
+    elif cmd in ("/pi-guncelle", "/pi_guncelle"):
+        spawn(_update_agent(chat_id))
     elif cmd == "/cihazlar":
         await tg.send(devices.text(), to=[chat_id])
     elif cmd == "/cihaz":

@@ -142,6 +142,22 @@ async def wait_for_ping() -> dict:
     return {"ping": True, "cmd": cmd}
 
 
+async def request_update() -> tuple[dict, dict] | None:
+    """Pi ajanına "yeniden başlat, en son imzalı sürümü al" der. Yeniden bağlanınca (önceki, sonraki) bilgiyi döndürür."""
+    before = dict(state["info"])
+    pending_cmd["cmd"] = "update"
+    ping_event.set()
+    deadline = time.time() + config.UPDATE_TIMEOUT
+    while time.time() < deadline:
+        await asyncio.sleep(1)
+        info = state["info"]
+        if info.get("agent_start") and info.get("agent_start") != before.get("agent_start") and time.time() - state["last_beat"] < 20:
+            return before, dict(info)
+    pending_cmd["cmd"] = None
+    ping_event.clear()
+    return None
+
+
 async def request_speedtest() -> dict | None:
     """Pi'ye şimdi hız testi yaptırır; sonucu (ya da zaman aşımında None) döndürür."""
     fut = asyncio.get_running_loop().create_future()
@@ -181,6 +197,8 @@ def fmt_info(info: dict) -> str:
         lines.append(f"🌡 CPU: {info['temp']}°C · yük {info.get('load', '?')}")
     if "mem_mb" in info:
         lines.append(f"💾 Boş RAM: {info['mem_mb']} MB")
+    if info.get("agent") is not None:
+        lines.append(f"🧩 Ajan sürümü: {info['agent']}")
     if info.get("wifi_dbm") is not None or info.get("ssid"):
         net = f" · {info['ssid']}" if info.get("ssid") else ""
         dbm = f"{info['wifi_dbm']} dBm" if info.get("wifi_dbm") is not None else "?"

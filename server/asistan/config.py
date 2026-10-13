@@ -53,3 +53,4 @@ PHARMACY_URL = os.getenv("PHARMACY_URL", "https://www.haberturk.com/nobetci-ecza
 
 # Hız testi (Pi yapar, sunucu kaydeder)
 SPEEDTEST_TIMEOUT = 150
+UPDATE_TIMEOUT = 90                                          # Pi ajan güncellemesinin yeniden bağlanmasını bekleme süresi

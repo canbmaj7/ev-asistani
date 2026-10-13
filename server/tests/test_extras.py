@@ -152,3 +152,64 @@ def test_maintenance_mutes_outage_messages(client, outbox):
     from asistan.db import db
     with db() as con:
         assert con.execute("SELECT COUNT(*) FROM outages").fetchone()[0] == 0
+
+
+def test_update_endpoint_requires_token_and_queues_command(client):
+    async def go():
+        async with client as c:
+            assert (await c.post("/pi/update")).status_code == 401
+            assert (await c.post("/pi/update", headers=H)).json() == {"ok": True}
+            return (await c.post("/wait", headers=H, timeout=5)).json()
+    assert run(go()) == {"ping": True, "cmd": "update"}
+
+
+def test_pi_update_command_roundtrip(client, outbox, monkeypatch):
+    """/pi_guncelle: Pi'ye 'update' gider; ajan yeniden başlayıp yeni sürümle ilk nabzı yollayınca sonuç bildirilir."""
+    monkeypatch.setattr(config, "UPDATE_TIMEOUT", 8)
+    old = {"agent": 1, "agent_start": 1000, "latency_ms": 20}
+    home.state.update(last_beat=time.time(), boot_id="a", info=dict(old))
+
+    async def go():
+        async with client as c:
+            async def pi():
+                r = (await c.post("/wait", headers=H, timeout=10)).json()
+                assert r == {"ping": True, "cmd": "update"}
+                await asyncio.sleep(1.2)                                  # yeniden başlama
+                await c.post("/beat", headers=H, json={"boot_id": "a", "uptime": 900, "info":
+                             {"agent": 2, "agent_start": 2000, "latency_ms": 18}})
+            t = asyncio.create_task(pi())
+            await asyncio.sleep(0.1)
+            from asistan import commands
+            await commands.handle(OWNER, {"from": {"first_name": "T"}}, "/pi_guncelle", "")
+            await asyncio.sleep(3)
+            await t
+    run(go())
+    assert any("güncelleniyor" in t for t in outbox.texts(OWNER))
+    assert "sürüm 1 → 2" in outbox.last() and "Ajan sürümü: 2" in outbox.last()
+
+
+def test_pi_update_no_answer_and_no_change(outbox, monkeypatch):
+    monkeypatch.setattr(config, "UPDATE_TIMEOUT", 2)
+    home.state.update(last_beat=time.time(), boot_id="a", info={"agent": 1, "agent_start": 1000})
+    from asistan import commands
+    run(commands._update_agent(OWNER))
+    assert "yanıt gelmedi" in outbox.last() and home.pending_cmd["cmd"] is None      # komut kuyrukta takılı kalmaz
+    # aynı sürümle yeniden başlama
+    outbox.clear()
+
+    async def go():
+        async def pi():
+            await asyncio.sleep(0.5)
+            await home.handle_beat(home.Beat(boot_id="a", uptime=900, info={"agent": 1, "agent_start": 3000}))
+        t = asyncio.create_task(pi())
+        await commands._update_agent(OWNER)
+        await t
+    monkeypatch.setattr(config, "UPDATE_TIMEOUT", 6)
+    run(go())
+    assert "yeni sürüm yoktu" in outbox.last()
+
+
+def test_pi_update_is_owner_only(outbox, member):
+    from asistan import commands
+    run(commands.handle(member, {"from": {"first_name": "K"}}, "/pi_guncelle", ""))
+    assert not outbox and home.pending_cmd["cmd"] is None
