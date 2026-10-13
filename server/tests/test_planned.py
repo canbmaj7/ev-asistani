@@ -205,3 +205,11 @@ def test_one_source_failing_does_not_break_the_other(monkeypatch):
     monkeypatch.setattr(outages, "sedas", fake_sedas)
     monkeypatch.setattr(outages, "isu", broken)
     assert [o["id"] for o in run(planned.fetch_all())] == ["sedas-1"]
+
+
+def test_requests_identify_themselves_honestly():
+    """Dış sitelere giden her istek kendini açıkça tanıtır: tarayıcı taklidi yok, depo adresi var."""
+    from asistan.sources.common import client
+    ua = client().headers["User-Agent"]
+    assert ua.startswith("ev-asistani/") and "github.com/canbmaj7/ev-asistani" in ua
+    assert "Mozilla" not in ua

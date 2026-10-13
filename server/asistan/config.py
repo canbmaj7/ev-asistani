@@ -11,7 +11,8 @@ BEAT_TOKEN = os.environ["BEAT_TOKEN"]                 # Pi ↔ sunucu paylaşıl
 DB_PATH = os.getenv("DB_PATH", "/data/nobetci.db")
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Istanbul"))
 PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")      # boşsa web paneli kapalı
-USER_AGENT = "ev-asistani/1.0"
+# Dış sitelere kendimizi açıkça tanıtırız: otomatik bir istemciyiz, kaynak kodu şurada
+USER_AGENT = "ev-asistani/1.0 (+https://github.com/canbmaj7/ev-asistani)"
 
 # Kesinti izleme
 TIMEOUT_SEC = int(os.getenv("TIMEOUT_SEC", "120"))    # başlangıç alarm eşiği (/esik ile değişir)
