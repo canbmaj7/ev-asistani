@@ -18,7 +18,7 @@ Coolify kullanıyorsan: *New Resource → Public Repository*, build pack **Docke
 
 Sabah özeti için `SEND_AT` (08:00), `CITY`/`LAT`/`LON`, `WATCH_URLS` (virgülle ayrılmış site adresleri) tanımlanır. Deprem eşiği `QUAKE_MIN_MAG` (4.0). Takvim sunucuda ayarlanmaz: her kişi botta `/takvim` ile kendi linkini bağlar.
 
-Planlı kesinti uyarıları için `DISTRICT` (SEDAŞ ilçe adı, ör. `GEBZE`) ve `NEIGHBORHOOD` (mahalle adı) tanımla. Ezan vakitleri için `PRAYER_DISTRICT_ID` (ezanvakti.emushaf.net ilçe kodu), nöbetçi eczane için `PHARMACY_URL`.
+Planlı kesinti uyarıları için (SEDAŞ her 30 dk, İSU her 10 dk okunur; `SEDAS_POLL_SEC`/`ISU_POLL_SEC`) `DISTRICT` (SEDAŞ ilçe adı, ör. `GEBZE`) ve `NEIGHBORHOOD` (mahalle adı) tanımla. Ezan vakitleri için `PRAYER_DISTRICT_ID` (ezanvakti.emushaf.net ilçe kodu), nöbetçi eczane için `PHARMACY_URL`.
 
 Web paneli için `PANEL_PASSWORD` ortam değişkenini tanımla (boşsa panel kapalı kalır). Alarm eşiği başlangıç değeri `TIMEOUT_SEC` (varsayılan 120 sn), sonradan `/esik` ile değişir.
 

@@ -26,6 +26,7 @@ def _parse_sedas(rows: list[dict], district: str) -> list[dict]:
             continue
         out.append({
             "id": f"sedas-{x.get('ZPKNO') or x.get('Id')}",
+            "sig": f"{day.isoformat()} {x.get('ZBASSAAT')}-{x.get('ZBITSAAT')}",     # tarih/saat değişirse yeniden bildirilir
             "kind": "elektrik", "day": day,
             "start": x.get("ZBASSAAT") or "?", "end": x.get("ZBITSAAT") or "?",
             "areas": (x.get("ZMAHALLE") or "").strip(" ,"),

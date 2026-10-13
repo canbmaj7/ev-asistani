@@ -35,7 +35,10 @@ QUAKE_POLL_SEC = int(os.getenv("QUAKE_POLL_SEC", "60"))
 # Planlı kesintiler (SEDAŞ elektrik, İSU su)
 DISTRICT = os.getenv("DISTRICT", "GEBZE")                    # SEDAŞ ilçe adı
 NEIGHBORHOOD = os.getenv("NEIGHBORHOOD", "")                 # anında uyarı yalnızca bu mahalle için (boşsa uyarı yok)
-PLANNED_POLL_SEC = int(os.getenv("PLANNED_POLL_SEC", "10800"))
+# Kaynak sitelere ne sıklıkla istek atılır (kaynak başına tek istek; hata olursa aralık ikiye katlanır, en çok 1 saat)
+SEDAS_POLL_SEC = int(os.getenv("SEDAS_POLL_SEC", "1800"))    # SEDAŞ planlı kesintileri günler önceden duyurur
+ISU_POLL_SEC = int(os.getenv("ISU_POLL_SEC", "600"))         # İSU arıza kesintileri aniden çıkabilir
+POLL_BACKOFF_MAX_SEC = 3600
 
 # Anlık hava uyarıları
 WEATHER_POLL_SEC = int(os.getenv("WEATHER_POLL_SEC", "900"))

@@ -1,4 +1,5 @@
 """Planlı kesintiler: mahalle eşleştirme, uyarılar ve İSU ayrıştırıcı."""
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -27,38 +28,100 @@ def test_affects_me_turkish_spelling():
     assert not planned.affects_me(el(1, TODAY, "YAVUZ SELİM, KÖSKLÜ ÇESME"))
 
 
-def test_loop_alerts_only_my_neighbourhood_once(outbox, monkeypatch):
-    items = [el(1, TODAY + timedelta(days=1), "ÖRNEK KÖY, BALÇIK"), el(2, TODAY, "YENİKENT"),
-             el(3, TODAY - timedelta(days=1), "ÖRNEK KÖY")]          # geçmiş: bildirilmez
+def sig(o):
+    return {**o, "sig": f"{o['day'].isoformat()} {o['start']}-{o['end']}"}
 
-    async def fake_fetch():
-        return [dict(o) for o in items]
-    monkeypatch.setattr(planned, "fetch_all", fake_fetch)
-    monkeypatch.setattr(config, "PLANNED_POLL_SEC", 0)
 
-    async def rounds(n):
-        import asyncio
-        calls = {"n": 0}
-        real = asyncio.sleep
-
-        async def sleep(_):
-            calls["n"] += 1
-            if calls["n"] >= n:
-                raise asyncio.CancelledError
-            await real(0)
-        monkeypatch.setattr(planned.asyncio, "sleep", sleep)
-        with pytest.raises(asyncio.CancelledError):
-            await planned.loop()
-    run(rounds(2))
+def test_notify_only_my_neighbourhood_and_only_once(outbox):
+    items = [sig(el(1, TODAY + timedelta(days=1), "ÖRNEK KÖY, BALÇIK")), sig(el(2, TODAY + timedelta(days=1), "YENİKENT")),
+             sig(el(3, TODAY - timedelta(days=1), "ÖRNEK KÖY"))]          # geçmiş: bildirilmez
+    run(planned.notify(items))
+    run(planned.notify(items))                                            # ikinci okuma: tekrar yok
     assert len(outbox) == 1 and outbox[0][0] == ("HERKES",)
     text = outbox.last()
     assert "Planlı elektrik kesintisi" in text and "Yarın 09:00–17:00" in text and "🔗 Kaynak: https://www.sedas.com" in text
-    assert set(kv_json("planned_seen", [])) == {"sedas-1", "sedas-2", "sedas-3"}
+    assert "Güncellendi" not in text
+    assert len(kv_json("planned_seen", [])) == 3
 
 
-def test_no_neighbourhood_no_alerts(monkeypatch):
-    monkeypatch.setattr(config, "NEIGHBORHOOD", "")
-    assert not planned.affects_me(el(1, TODAY, "ÖRNEK KÖY"))
+def test_changed_time_alerts_again(outbox):
+    day = TODAY + timedelta(days=1)
+    run(planned.notify([sig(el(1, day, "ÖRNEK KÖY", "09:00", "17:00"))]))
+    run(planned.notify([sig(el(1, day, "ÖRNEK KÖY", "10:00", "14:00"))]))   # SEDAŞ saati değiştirdi
+    assert len(outbox) == 2 and outbox[1][1].startswith("🔄 Güncellendi") and "10:00–14:00" in outbox[1][1]
+
+
+def test_finished_outage_today_not_announced(outbox):
+    now = datetime.now(config.TZ)
+    if now.hour == 0 and now.minute < 5:
+        pytest.skip("gece yarısı sınırı")
+    past_end = f"{now.hour:02d}:{max(now.minute - 1, 0):02d}" if now.minute else "00:00"
+    run(planned.notify([sig(el(1, TODAY, "ÖRNEK KÖY", "00:00", past_end))]))
+    assert not outbox
+    run(planned.notify([sig(el(2, TODAY, "ÖRNEK KÖY", "00:00", "23:59"))]))  # henüz bitmedi
+    assert len(outbox) == 1
+
+
+def test_water_cut_text_match_alerts_immediately(outbox):
+    su = {"id": "isu-1", "kind": "su", "title": "Gebze Örnek Köy Mahallesi'nde su kesintisi", "url": outages.ISU_PAGE}
+    run(planned.notify([su]))
+    assert outbox.last().startswith("💧 Su kesintisi duyurusu")
+
+
+def _sources(monkeypatch, sedas=None, isu=None):
+    calls = {"sedas": 0, "isu": 0}
+
+    async def fs():
+        calls["sedas"] += 1
+        if isinstance(sedas, Exception):
+            raise sedas
+        return sedas or []
+
+    async def fi():
+        calls["isu"] += 1
+        if isinstance(isu, Exception):
+            raise isu
+        return isu or []
+    monkeypatch.setattr(planned, "fetch_sedas", fs)
+    monkeypatch.setattr(planned, "fetch_isu", fi)
+    return calls
+
+
+def test_poll_respects_interval_and_sources_are_independent(monkeypatch):
+    calls = _sources(monkeypatch, sedas=[sig(el(1, TODAY, "YENİKENT"))])
+    state = {"next": 0.0, "fails": 0}
+    t0 = time.time()
+    run(planned.poll("sedas", planned.fetch_sedas, 1800, state))
+    run(planned.poll("sedas", planned.fetch_sedas, 1800, state))        # aralık dolmadı → istek yok
+    assert calls["sedas"] == 1 and calls["isu"] == 0
+    assert 1800 * 0.9 - 5 <= state["next"] - t0 <= 1800 * 1.1 + 5
+    state["next"] = 0
+    run(planned.poll("sedas", planned.fetch_sedas, 1800, state))
+    assert calls["sedas"] == 2
+
+
+def test_poll_backs_off_on_errors_and_keeps_other_cache(monkeypatch):
+    _sources(monkeypatch, sedas=[sig(el(1, TODAY, "YENİKENT"))], isu=TimeoutError())
+    ok, bad = {"next": 0.0, "fails": 0}, {"next": 0.0, "fails": 0}
+    run(planned.poll("sedas", planned.fetch_sedas, 1800, ok))
+    for expected in (1200, 2400, 3600, 3600):                           # 600·2ⁿ, en çok 1 saat
+        bad["next"] = 0
+        t = time.time()
+        run(planned.poll("isu", planned.fetch_isu, 600, bad))
+        assert abs((bad["next"] - t) - expected) < 5
+    assert bad["fails"] == 4
+    assert [o["id"] for o in planned.cached()] == ["sedas-1"]          # İSU hatası SEDAŞ önbelleğini silmedi
+
+
+def test_only_sedas_and_isu_are_contacted():
+    """Kesinti verisi yalnızca SEDAŞ ve İSU'dan: kaynak modülündeki tüm adresler bu iki alan adında."""
+    import re
+    from pathlib import Path
+    code = Path(outages.__file__).read_text(encoding="utf-8")
+    hosts = set(re.findall(r"https?://([a-z0-9.-]+)", code))
+    assert hosts and all(h.endswith(("sedas.com", "isu.gov.tr")) for h in hosts), hosts
+    planned_code = Path(planned.__file__).read_text(encoding="utf-8")
+    assert not re.findall(r"https?://", planned_code)                   # planned.py kendi başına siteye gitmez
 
 
 def test_section():

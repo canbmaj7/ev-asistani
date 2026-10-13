@@ -5,6 +5,8 @@ sabah özetinde ilçenin bugün/yarın listesi görünür.
 """
 import asyncio
 import json
+import random
+import time
 from datetime import date, datetime, timedelta
 
 from . import config
@@ -80,47 +82,94 @@ def relevant_su(o: dict) -> bool:
     return norm(config.DISTRICT) in norm(o["title"]) or affects_me(o)
 
 
-async def fetch_all() -> list[dict]:
-    """Elektrik + ilçeyi ilgilendiren su kesintileri. Birinin hatası diğerini engellemez."""
+async def fetch_sedas() -> list[dict]:
     async with client(25) as c:
-        el, su = await asyncio.gather(src.sedas(c), src.isu(c), return_exceptions=True)
+        return await src.sedas(c)
+
+
+async def fetch_isu() -> list[dict]:
+    async with client(25) as c:
+        return [o for o in await src.isu(c) if relevant_su(o)]
+
+
+async def fetch_all() -> list[dict]:
+    """/kesinti için anlık okuma: SEDAŞ + ilgili İSU duyuruları. Birinin hatası diğerini engellemez."""
+    el, su = await asyncio.gather(fetch_sedas(), fetch_isu(), return_exceptions=True)
     result = []
-    if isinstance(el, Exception):
-        log.error("SEDAŞ okunamadı (%s)", type(el).__name__)
-    else:
-        result += el
-    if isinstance(su, Exception):
-        log.error("İSU okunamadı (%s)", type(su).__name__)
-    else:
-        result += [o for o in su if relevant_su(o)]
+    for name, res in (("SEDAŞ", el), ("İSU", su)):
+        if isinstance(res, Exception):
+            log.error("%s okunamadı (%s)", name, type(res).__name__)
+        else:
+            result += res
     return result
 
 
+def still_relevant(o: dict, now: datetime) -> bool:
+    """Bitmiş kesinti için uyarı gönderme (bugünse bitiş saati geçmiş olmasın)."""
+    if o["kind"] == "su":
+        return True
+    today = now.date()
+    if o["day"] > today:
+        return True
+    if o["day"] < today:
+        return False
+    try:
+        hh, mm = map(int, o["end"].split(":"))
+    except ValueError:
+        return True
+    return (hh, mm) > (now.hour, now.minute)
+
+
+async def notify(items: list[dict]) -> None:
+    """Mahalleyi etkileyen yeni (ya da saati değişmiş) kesintiler için herkese uyarı gönderir."""
+    seen = set(kv_json("planned_seen", []))
+    now = datetime.now(config.TZ)
+    for o in items:
+        key = f"{o['id']}|{o.get('sig', '')}"
+        if key in seen:
+            continue
+        updated = any(k.startswith(o["id"] + "|") for k in seen)       # aynı kayıt, farklı tarih/saat
+        seen.add(key)
+        if affects_me(o) and still_relevant(o, now):
+            await tg.send(("🔄 Güncellendi\n" if updated else "") + alert(o, now.date()))
+    kv_set("planned_seen", json.dumps(sorted(seen)[-2000:]))
+
+
+def store(name: str, items: list[dict]) -> None:
+    kv_set(f"planned_cache_{name}", json.dumps([{**o, "day": o["day"].isoformat()} if "day" in o else o for o in items]))
+
+
+async def poll(name: str, fetch, interval: int, state: dict) -> None:
+    """Bir kaynağı sırası gelince okur; hata olursa aralığı ikiye katlayıp (en çok 1 saat) tekrar dener."""
+    if time.time() < state["next"]:
+        return
+    try:
+        items = await fetch()
+        store(name, items)
+        await notify(items)
+        state.update(fails=0, next=time.time() + interval * random.uniform(0.9, 1.1))
+    except Exception as e:
+        state["fails"] += 1
+        wait = min(interval * 2 ** state["fails"], config.POLL_BACKOFF_MAX_SEC)
+        state["next"] = time.time() + wait
+        log.error("%s kontrolü başarısız (%s); %d sn sonra tekrar denenecek", name, type(e).__name__, wait)
+
+
 async def loop() -> None:
+    sched = {"sedas": {"next": 0.0, "fails": 0}, "isu": {"next": 0.0, "fails": 0}}
     while True:
-        try:
-            items = await fetch_all()
-            seen = set(kv_json("planned_seen", []))
-            today = datetime.now(config.TZ).date()
-            for o in items:
-                if o["id"] in seen:
-                    continue
-                seen.add(o["id"])
-                if affects_me(o) and (o["kind"] == "su" or o["day"] >= today):
-                    await tg.send(alert(o, today))
-            kv_set("planned_seen", json.dumps(sorted(seen)[-1000:]))
-            kv_set("planned_cache", json.dumps([{**o, "day": o["day"].isoformat()} if "day" in o else o for o in items]))
-        except Exception as e:
-            log.error("Planlı kesinti kontrolü başarısız (%s)", type(e).__name__)
-        await asyncio.sleep(config.PLANNED_POLL_SEC)
+        await poll("sedas", fetch_sedas, config.SEDAS_POLL_SEC, sched["sedas"])
+        await poll("isu", fetch_isu, config.ISU_POLL_SEC, sched["isu"])
+        await asyncio.sleep(30)
 
 
 def cached() -> list[dict]:
     out = []
-    for o in kv_json("planned_cache", []):
-        if "day" in o:
-            o["day"] = date.fromisoformat(o["day"])
-        out.append(o)
+    for name in ("sedas", "isu"):
+        for o in kv_json(f"planned_cache_{name}", []):
+            if "day" in o:
+                o["day"] = date.fromisoformat(o["day"])
+            out.append(o)
     return out
 
 
