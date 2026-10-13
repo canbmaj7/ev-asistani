@@ -41,14 +41,14 @@ def env(tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
     served = {}                                                    # url_son_eki → bayt
 
-    def fake_fetch(url, timeout=20):
+    def fake_fetch_release(name, api=None, base=None):
         for suffix, data in served.items():
-            if url.endswith(suffix):
+            if name == suffix:
                 if isinstance(data, Exception):
                     raise data
                 return data
         raise OSError("404")
-    monkeypatch.setattr(launcher, "fetch", fake_fetch)
+    monkeypatch.setattr(launcher, "fetch_release", fake_fetch_release)
     monkeypatch.setattr(launcher.time, "sleep", lambda s: None)
 
     class E:
@@ -56,7 +56,7 @@ def env(tmp_path, monkeypatch):
     e = E()
     e.priv, e.pub, e.baked, e.run_dir, e.served, e.tmp = priv, pub, baked, run_dir, served, tmp_path
     e.publish = lambda data, key=priv: served.update({"heartbeat.py": data, "heartbeat.py.sig": sign(key, data, tmp_path)})
-    e.choose = lambda: launcher.choose("http://x", str(pub), str(baked), str(run_dir))
+    e.choose = lambda: launcher.choose("http://x", str(pub), str(baked), str(run_dir), api=None)
     return e
 
 
@@ -127,3 +127,21 @@ def test_repo_agent_signature_matches_public_key():
     assert launcher.verify((ROOT / "heartbeat.py").read_bytes(), sig, str(ROOT / "release.pub")), \
         "pi/heartbeat.py değişti ama imzalanmadı: scripts/release-agent.sh çalıştır"
     assert launcher.version_of((ROOT / "heartbeat.py").read_bytes()) is not None
+
+
+def test_fetch_release_prefers_api_then_falls_back_to_raw(monkeypatch):
+    calls = []
+
+    def fake_fetch(url, timeout=20, accept=None):
+        calls.append((url, accept))
+        if "api.github.com" in url and len(calls) == 1:
+            raise OSError("API sınırı aşıldı")
+        return b"veri"
+    monkeypatch.setattr(launcher, "fetch", fake_fetch)
+    assert launcher.fetch_release("heartbeat.py", "https://api.github.com/x/contents/pi", "https://raw.example/pi") == b"veri"
+    assert calls[0] == ("https://api.github.com/x/contents/pi/heartbeat.py?ref=main", "application/vnd.github.raw+json")
+    assert calls[1] == ("https://raw.example/pi/heartbeat.py", None)                         # API düştü → raw
+    calls.clear()
+    monkeypatch.setattr(launcher, "fetch", lambda url, timeout=20, accept=None: (_ for _ in ()).throw(OSError("yok")))
+    with pytest.raises(OSError):
+        launcher.fetch_release("heartbeat.py", "https://api.github.com/x/contents/pi", "https://raw.example/pi")

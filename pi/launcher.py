@@ -21,6 +21,8 @@ import tempfile
 import time
 import urllib.request
 
+# GitHub API önbelleksizdir (push'tan hemen sonra yeni sürümü verir); raw.githubusercontent.com ise 5 dk önbelleğe alır → yedek
+API = os.environ.get("NOBETCI_RELEASE_API", "https://api.github.com/repos/canbmaj7/ev-asistani/contents/pi")
 BASE = os.environ.get("NOBETCI_RELEASE_URL", "https://raw.githubusercontent.com/canbmaj7/ev-asistani/main/pi")
 PUBKEY = os.environ.get("NOBETCI_RELEASE_PUB", "/opt/nobetci/release.pub")
 BAKED = os.environ.get("NOBETCI_BAKED_AGENT", "/opt/nobetci/heartbeat.py")
@@ -38,10 +40,12 @@ def version_of(data: bytes):
     return int(m.group(1)) if m else None
 
 
-def fetch(url: str, timeout: float = 20) -> bytes:
+def fetch(url: str, timeout: float = 20, accept: str | None = None) -> bytes:
     sep = "&" if "?" in url else "?"
-    req = urllib.request.Request(f"{url}{sep}t={int(time.time())}",          # CDN önbelleğini atla
-                                 headers={"User-Agent": "ev-asistani-launcher", "Cache-Control": "no-cache"})
+    headers = {"User-Agent": "ev-asistani-launcher", "Cache-Control": "no-cache"}
+    if accept:
+        headers["Accept"] = accept
+    req = urllib.request.Request(f"{url}{sep}t={int(time.time())}", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = r.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
@@ -70,6 +74,20 @@ def verify(data: bytes, sig_b64: bytes, pubkey: str = PUBKEY, workdir: str | Non
     return r.returncode == 0
 
 
+def fetch_release(name: str, api: str = API, base: str = BASE) -> bytes:
+    """Sürüm dosyasını önce GitHub API'sinden (taze), olmazsa raw adresinden (önbellekli) alır."""
+    errors = []
+    for url, accept in ((f"{api}/{name}?ref=main", "application/vnd.github.raw+json") if api else (None, None),
+                        (f"{base}/{name}", None)):
+        if not url:
+            continue
+        try:
+            return fetch(url, accept=accept)
+        except Exception as e:                                   # API sınırı/ağ hatası → sıradaki kaynak
+            errors.append(type(e).__name__)
+    raise OSError("indirilemedi: " + ", ".join(errors))
+
+
 def read_file(path: str):
     try:
         with open(path, "rb") as f:
@@ -78,7 +96,7 @@ def read_file(path: str):
         return None
 
 
-def choose(base: str = BASE, pubkey: str = PUBKEY, baked: str = BAKED, run_dir: str = RUN_DIR) -> str:
+def choose(base: str = BASE, pubkey: str = PUBKEY, baked: str = BAKED, run_dir: str = RUN_DIR, api: str | None = API) -> str:
     """Çalıştırılacak ajan dosyasının yolunu döndürür (indirilen doğrulanmış sürüm ya da yedek)."""
     os.makedirs(run_dir, mode=0o700, exist_ok=True)
     cached_path = os.path.join(run_dir, "heartbeat.py")
@@ -88,7 +106,7 @@ def choose(base: str = BASE, pubkey: str = PUBKEY, baked: str = BAKED, run_dir: 
     fallback = cached_path if cached is not None else baked
     try:
         for attempt in (1, 2):                                   # CDN'de py/sig geçici uyumsuzsa bir kez daha dene
-            data, sig = fetch(base + "/heartbeat.py"), fetch(base + "/heartbeat.py.sig")
+            data, sig = fetch_release("heartbeat.py", api, base), fetch_release("heartbeat.py.sig", api, base)
             v = version_of(data)
             if v is None:
                 raise ValueError("indirilen dosyada AGENT_VERSION yok")
