@@ -78,8 +78,8 @@ async def _update_agent(chat_id: int) -> None:
         return
     before, after = r
     old, new = before.get("agent"), after.get("agent")
-    note = "yeni sürüm yoktu, aynı sürümle yeniden başladı" if old == new else f"{old} → {new}"
-    await tg.send(f"✅ Pi ajanı yeniden başladı · sürüm {note}\n{home.fmt_info(after)}", to=[chat_id])
+    note = f"yeni sürüm yoktu, sürüm {new} ile yeniden başladı" if old == new else f"sürüm {old} → {new} (güncellendi)"
+    await tg.send(f"✅ Pi ajanı yeniden başladı · {note}\n{home.fmt_info(after)}", to=[chat_id])
 
 
 async def _maintenance(chat_id: int, arg: str) -> None:

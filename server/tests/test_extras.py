@@ -185,7 +185,7 @@ def test_pi_update_command_roundtrip(client, outbox, monkeypatch):
             await t
     run(go())
     assert any("güncelleniyor" in t for t in outbox.texts(OWNER))
-    assert "sürüm 1 → 2" in outbox.last() and "Ajan sürümü: 2" in outbox.last()
+    assert "sürüm 1 → 2 (güncellendi)" in outbox.last() and "Ajan sürümü: 2" in outbox.last()
 
 
 def test_pi_update_no_answer_and_no_change(outbox, monkeypatch):
@@ -206,7 +206,7 @@ def test_pi_update_no_answer_and_no_change(outbox, monkeypatch):
         await t
     monkeypatch.setattr(config, "UPDATE_TIMEOUT", 6)
     run(go())
-    assert "yeni sürüm yoktu" in outbox.last()
+    assert "yeni sürüm yoktu, sürüm 1 ile yeniden başladı" in outbox.last()
 
 
 def test_pi_update_is_owner_only(outbox, member):
