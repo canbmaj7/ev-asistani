@@ -38,3 +38,12 @@ sudo reboot
 ## Güç
 Pi 3 için en az **5V / 2.5A** adaptör ve kısa, kalın bir kablo kullan. Kontrol:
 `vcgencmd get_throttled` → `0x0` ideal. `0x50000` açılıştan beri düşük voltaj görüldüğünü söyler.
+
+## Modem cihaz adları (Keenetic)
+Pi, modemin panelindeki cihaz adlarını `/cihazlar`'a taşıyabilir. Modemde **yalnızca "Web arayüzü" yetkili ve "Sistem ayarlarını kaydetmeyi engelle" işaretli** ayrı bir kullanıcı açılır; yönetici parolası kullanılmaz. `/etc/nobetci.env` içine (overlay kapalıyken, yukarıdaki yordamla) şunlar eklenir:
+```
+NOBETCI_ROUTER_URL=http://192.168.1.1
+NOBETCI_ROUTER_USER=<salt okunur kullanıcı>
+NOBETCI_ROUTER_PASS=<parolası>
+```
+Üçü de boşsa özellik kapalıdır; erişilemezse eski ARP/DNS adlarıyla devam edilir. Parola repoya girmez.

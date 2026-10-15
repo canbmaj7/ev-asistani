@@ -14,6 +14,8 @@
 Yalnızca standart kütüphane.
 """
 import concurrent.futures
+import hashlib
+import http.cookiejar
 import ipaddress
 import json
 import os
@@ -21,9 +23,11 @@ import socket
 import subprocess
 import threading
 import time
+import re
+import urllib.error
 import urllib.request
 
-AGENT_VERSION = 4            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
+AGENT_VERSION = 5            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
 AGENT_STARTED = int(time.time())
 
 URL = os.environ["NOBETCI_URL"]          # örn. https://<alan-adı>/beat
@@ -52,6 +56,10 @@ SPEED_HOST = "speed.cloudflare.com"
 # Ağ taraması
 SCAN_EVERY = int(os.getenv("NOBETCI_SCAN_EVERY", "300"))
 SCAN_ENABLED = os.getenv("NOBETCI_SCAN", "1") == "1"
+# Keenetic modemin cihaz adları (salt okunur kullanıcıyla). Üçü de doluysa panel adları kullanılır.
+ROUTER_URL = os.getenv("NOBETCI_ROUTER_URL", "")          # örn. http://192.168.1.1
+ROUTER_USER = os.getenv("NOBETCI_ROUTER_USER", "")
+ROUTER_PASS = os.getenv("NOBETCI_ROUTER_PASS", "")
 
 net_events = []        # [{"dur": sn, "_end": monotonic}] — sunucuya henüz iletilmemiş kopmalar
 offline_since = None   # internet son kontrolde yoksa kopma başlangıcı (monotonic)
@@ -230,6 +238,29 @@ def resolve(ip: str) -> str:
         return ""
 
 
+def clean_router_name(name: str, hostname: str) -> str:
+    """Keenetic bağlanan cihaza 'MSI - Birincil - 2026-10-13 13:43' gibi otomatik ad verir; sonekini at."""
+    name = re.sub(r"\s+-\s+.+\s+-\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$", "", (name or "").strip())
+    return (name or (hostname or "")).strip()[:40]
+
+
+def router_names() -> dict[str, str]:
+    """Modem panelindeki cihaz adları: {mac: ad}. Ayar yoksa ya da erişilemezse boş döner."""
+    if not (ROUTER_URL and ROUTER_USER and ROUTER_PASS):
+        return {}
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    try:
+        op.open(ROUTER_URL + "/auth", timeout=8)
+        return {}                                        # giriş istemiyorsa beklenmedik durum
+    except urllib.error.HTTPError as e:
+        realm, challenge = e.headers.get("X-NDM-Realm", ""), e.headers.get("X-NDM-Challenge", "")
+    md5 = hashlib.md5(f"{ROUTER_USER}:{realm}:{ROUTER_PASS}".encode()).hexdigest()
+    body = json.dumps({"login": ROUTER_USER, "password": hashlib.sha256((challenge + md5).encode()).hexdigest()})
+    op.open(urllib.request.Request(ROUTER_URL + "/auth", body.encode(), {"Content-Type": "application/json"}), timeout=8)
+    hosts = json.load(op.open(ROUTER_URL + "/rci/show/ip/hotspot", timeout=8)).get("host", [])
+    return {h["mac"].lower(): n for h in hosts if h.get("mac") and (n := clean_router_name(h.get("name"), h.get("hostname")))}
+
+
 def scan_network():
     """UDP paketleriyle ARP çözümlemesini tetikler, /proc/net/arp'ten cihazları okur."""
     found = local_network()
@@ -259,8 +290,13 @@ def scan_network():
                     hostnames[ip] = fut.result(timeout=4)
                 except Exception:
                     hostnames[ip] = ""
+    try:
+        names = router_names()
+    except Exception as e:
+        names = {}
+        log(f"modem adları alınamadı: {type(e).__name__}")
     for d in devices:
-        d["host"] = hostnames.get(d["ip"], "")
+        d["host"] = names.get(d["mac"]) or hostnames.get(d["ip"], "")
     return devices
 
 
