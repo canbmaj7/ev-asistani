@@ -26,13 +26,21 @@ def test_token_required(client):
 
 
 def test_short_power_cut_excludes_boot_time(outbox):
-    """Son nabız 100 sn önce, Pi 40 sn önce açıldı → kesinti ~60 sn."""
-    home.state.update(last_beat=time.time() - 100, boot_id="eski")
-    run(home.handle_beat(home.Beat(boot_id="yeni", uptime=40)))
+    """Router da gitti: Pi 130 sn önce açıldı, ilk nabız ancak şimdi geldi → kısa elektrik kesintisi."""
+    home.state.update(last_beat=time.time() - 200, boot_id="eski")
+    run(home.handle_beat(home.Beat(boot_id="yeni", uptime=130)))
     kind, dur = last_outage()
-    assert kind == "elektrik" and 55 <= dur <= 65
+    assert kind == "elektrik" and 65 <= dur <= 75
     assert "Kısa elektrik kesintisi" in outbox.last() and "1 dk" in outbox.last()
     assert outbox[-1][0] == ("HERKES",)
+
+
+def test_pi_reset_with_network_up_is_not_power_cut(outbox):
+    """Pi 40 sn önce açıldı ve ilk nabzını hemen yolladı → router ayaktaydı: elektrik değil, Pi resetlendi; bildirim yok."""
+    home.state.update(last_beat=time.time() - 60, boot_id="eski")
+    run(home.handle_beat(home.Beat(boot_id="yeni", uptime=40)))
+    assert last_outage()[0] == "reset"
+    assert not outbox
 
 
 def test_long_power_cut_end(outbox):

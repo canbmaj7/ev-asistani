@@ -7,6 +7,9 @@ from .db import db, kv_get
 from .util import fmt_dur, fmt_time
 
 
+ICONS = {"elektrik": "⚡", "internet": "🌐", "reset": "🔄"}   # reset: Pi yeniden başladı ama evde elektrik/internet vardı
+
+
 def record_outage(kind: str, started: float, ended: float) -> None:
     with db() as con:
         con.execute("INSERT INTO outages (kind, started, ended) VALUES (?, ?, ?)", (kind, started, ended))
@@ -30,6 +33,8 @@ def outage_stats(days: int) -> dict:
         k = out["kinds"].setdefault(r["kind"], {"n": 0, "sec": 0.0})
         k["n"] += 1
         k["sec"] += dur
+        if r["kind"] == "reset":        # Pi'nin kendi resetleri erişilebilirliği düşürmez
+            continue
         out["total"] += dur
         if out["longest"] is None or dur > out["longest"][0]:
             out["longest"] = (dur, r["started"])
@@ -47,7 +52,7 @@ def report_text(days_list=(7, 30)) -> str:
         lines = [title]
         if not st["kinds"]:
             lines.append("Hiç kesinti olmadı 🎉")
-        for kind, icon, label in (("elektrik", "⚡", "Elektrik"), ("internet", "🌐", "İnternet")):
+        for kind, icon, label in (("elektrik", "⚡", "Elektrik"), ("internet", "🌐", "İnternet"), ("reset", "🔄", "Pi resetlendi")):
             if k := st["kinds"].get(kind):
                 lines.append(f"{icon} {label}: {k['n']} kesinti · toplam {fmt_dur(k['sec'])}")
         if st["longest"]:
@@ -65,7 +70,7 @@ def history_text() -> str:
     if not rows:
         return "Kayıtlı kesinti yok."
     return "Son kesintiler:\n" + "\n".join(
-        f"{'⚡' if r['kind'] == 'elektrik' else '🌐'} {fmt_time(r['started'])} — {fmt_dur(r['ended'] - r['started'])}"
+        f"{ICONS.get(r['kind'], '🌐')} {fmt_time(r['started'])} — {fmt_dur(r['ended'] - r['started'])}"
         for r in rows)
 
 

@@ -84,6 +84,8 @@ function stats(box, st){
     const e = st.kinds.elektrik || {n:0, sec:0}, i = st.kinds.internet || {n:0, sec:0};
     kv(p, '⚡ Elektrik', `${e.n} · ${fmtDur(e.sec)}`);
     kv(p, '🌐 İnternet', `${i.n} · ${fmtDur(i.sec)}`);
+    const r = st.kinds.reset;
+    if (r) kv(p, '🔄 Pi resetlendi', `${r.n}`);
     kv(p, 'En uzun kesinti', st.longest ? fmtDur(st.longest) : '—');
   });
 }
@@ -159,7 +161,7 @@ function render(d){
   table($('speeds'), ['Zaman', 'İndirme', 'Yükleme', 'Ping'],
     (d.speedtests || []).slice(0, 7).map(p => [fmtTime(p.at), `${(p.down_mbps || 0).toFixed(1)} Mbps`, `${(p.up_mbps || 0).toFixed(1)} Mbps`, `${Math.round(p.ping_ms || 0)} ms`]), '');
   table($('outages'), ['Tür', 'Başlangıç', 'Süre'],
-    d.outages.map(o => [o.kind === 'elektrik' ? '⚡ Elektrik' : '🌐 İnternet', fmtTime(o.started), fmtDur(o.ended - o.started)]), 'Kayıtlı kesinti yok 🎉');
+    d.outages.map(o => [({elektrik: '⚡ Elektrik', reset: '🔄 Pi resetlendi'})[o.kind] || '🌐 İnternet', fmtTime(o.started), fmtDur(o.ended - o.started)]), 'Kayıtlı kesinti yok 🎉');
   table($('devices'), ['Cihaz', 'IP', 'Son görülme'],
     d.devices.map(v => { const c = el('span'); c.append(el('span', null, 'dot' + (v.online ? ' on' : '')), document.createTextNode(v.name || v.host || 'adsız'));
       return [c, v.ip || '?', v.online ? 'şimdi' : fmtTime(v.last_seen)]; }), 'Henüz tarama sonucu yok.');

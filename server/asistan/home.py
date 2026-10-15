@@ -12,6 +12,7 @@ from .util import fmt_dur, fmt_time
 STARTED_AT = time.time()
 FLAKY_WINDOW = 1800     # sn: bu sürede çok sayıda kısa kopma olursa mesajlar tek özete iner
 FLAKY_AFTER = 3         # ilk 3 kopma ayrı ayrı bildirilir
+RESET_UPTIME_SEC = 75   # yeniden başlayan Pi'nin ilk nabzı bundan erken gelirse router ayaktaydı → elektrik değil, Pi'nin kendi gücü
 state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None, "info": {}}
 ping_event = asyncio.Event()       # /durum istendi: Pi'ye "şimdi ölç" sinyali (long-poll kanalı)
 live_waiters: list = []            # canlı yanıtı bekleyen istekler
@@ -89,8 +90,12 @@ async def handle_beat(b: Beat) -> None:
         stats.record_outage(kind, started, ended)
         title = "⚡ Elektrik kesintisi bitti" if rebooted else "🌐 İnternet kesintisi bitti"
         await tg.send(f"✅ {title}\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ended - started)}")
+    elif rebooted and prev_beat and b.uptime and b.uptime < RESET_UPTIME_SEC:
+        # Pi yeniden başladı ama ağ (router) kesilmedi: evde elektrik var, Pi'nin beslemesi sarsılmış (adaptör/kablo/priz).
+        # Elektrik kesintisi sayılmaz, bildirim gitmez; yalnızca /gecmis ve panelde "Pi resetlendi" olarak görünür.
+        stats.record_outage("reset", prev_beat, min(now, max(boot_time, prev_beat)))
     elif rebooted and prev_beat:
-        # Alarm eşiğine varmadan biten kısa elektrik kesintisi
+        # Alarm eşiğine varmadan biten kısa elektrik kesintisi (router da gitmiş: ilk nabız geç geldi)
         started = prev_beat
         ended = min(now, max(boot_time, started))
         stats.record_outage("elektrik", started, ended)
@@ -240,7 +245,7 @@ def summary_section() -> str:
     st = stats.outage_stats(1)
     if st["kinds"]:
         lines.append("Son 24 saat kesinti: " + ", ".join(
-            f"{'⚡' if k == 'elektrik' else '🌐'} {v['n']} ({fmt_dur(v['sec'])})" for k, v in st["kinds"].items()))
+            f"{stats.ICONS.get(k, '🌐')} {v['n']} ({fmt_dur(v['sec'])})" for k, v in st["kinds"].items()))
     else:
         lines.append("Son 24 saatte kesinti yok.")
     return "\n".join(lines)
