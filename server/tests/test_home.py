@@ -136,3 +136,29 @@ def test_flaky_connection_collapses_into_one_summary(outbox):
     from asistan.db import db
     with db() as con:
         assert con.execute("SELECT COUNT(*) FROM outages WHERE kind = 'internet'").fetchone()[0] == 8
+
+
+def test_short_internet_event_tells_router_state(outbox):
+    home.state.update(last_beat=time.time() - 30, boot_id="a")
+    run(home.handle_beat(home.Beat(boot_id="a", uptime=500, net_events=[{"dur": 45, "ago": 10, "lan": True}])))
+    assert "hat ya da operatör" in outbox.last()
+    with db() as con:
+        assert con.execute("SELECT note FROM outages ORDER BY id DESC LIMIT 1").fetchone()["note"] == "hat/operatör"
+
+
+def test_reset_records_cause_and_alerts_owner_when_frequent(outbox):
+    from asistan import config
+    for i in range(3):
+        home.state.update(last_beat=time.time() - 60, boot_id=f"eski{i}")
+        run(home.handle_beat(home.Beat(boot_id=f"yeni{i}", uptime=40, info={"rsts": 0x1000, "throttled": 0})))
+    with db() as con:
+        assert con.execute("SELECT note FROM outages ORDER BY id DESC LIMIT 1").fetchone()["note"] == "güç gitti (power-on reset)"
+    assert "3 kez resetlendi" in outbox.last()
+    assert outbox[-1][0] == (config.OWNER_ID,)
+
+
+def test_undervoltage_alert_once_per_boot(outbox):
+    home.state.update(last_beat=time.time() - 5, boot_id="a")
+    for _ in range(2):
+        run(home.handle_beat(home.Beat(boot_id="a", uptime=900, info={"throttled": 0x50005})))
+    assert sum("düşük voltaj" in t for _, t in outbox) == 1

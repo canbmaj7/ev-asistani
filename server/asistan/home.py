@@ -4,7 +4,7 @@ import time
 
 from pydantic import BaseModel
 
-from . import config, devices, speed, stats
+from . import config, devices, power, speed, stats
 from . import telegram as tg
 from .db import kv_get, kv_set
 from .util import fmt_dur, fmt_time
@@ -13,6 +13,9 @@ STARTED_AT = time.time()
 FLAKY_WINDOW = 1800     # sn: bu sürede çok sayıda kısa kopma olursa mesajlar tek özete iner
 FLAKY_AFTER = 3         # ilk 3 kopma ayrı ayrı bildirilir
 RESET_UPTIME_SEC = 75   # yeniden başlayan Pi'nin ilk nabzı bundan erken gelirse router ayaktaydı → elektrik değil, Pi'nin kendi gücü
+LAN_NOTE = {True: "\nRouter/Wi-Fi ayaktaydı: sorun hat ya da operatör tarafında.",
+            False: "\nRouter'a da ulaşılamadı: Wi-Fi/router tarafında bir kopma."}
+LAN_SHORT = {True: "hat/operatör", False: "router/Wi-Fi"}
 state = {"last_beat": 0.0, "boot_id": None, "device": None, "down_since": None, "info": {}}
 ping_event = asyncio.Event()       # /durum istendi: Pi'ye "şimdi ölç" sinyali (long-poll kanalı)
 live_waiters: list = []            # canlı yanıtı bekleyen istekler
@@ -23,6 +26,7 @@ pending_cmd: dict = {"cmd": None}  # Pi'ye uzun bekleme kanalıyla iletilecek ko
 class NetEvent(BaseModel):
     dur: float   # Pi'nin ölçtüğü internet kopması (sn)
     ago: float   # kopmanın bitişinden bu yana (sn)
+    lan: bool | None = None   # kopma boyunca yerel ağ geçidi (router) erişilebilir miydi? (eski ajanda None)
 
 
 class Beat(BaseModel):
@@ -72,9 +76,10 @@ async def handle_beat(b: Beat) -> None:
             ended = now - ev.ago
             started = ended - ev.dur
             recent = stats.recent_count("internet", now - FLAKY_WINDOW)
-            stats.record_outage("internet", started, ended)
+            stats.record_outage("internet", started, ended, LAN_SHORT.get(ev.lan, ""))
             if recent < FLAKY_AFTER:
-                await tg.send(f"🌐 Kısa internet kesintisi oldu\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ev.dur)}")
+                await tg.send(f"🌐 Kısa internet kesintisi oldu\nBaşlangıç: {fmt_time(started)}\nSüre: {fmt_dur(ev.dur)}"
+                              + LAN_NOTE.get(ev.lan, ""))
             elif now - float(kv_get("flaky_msg_at") or 0) > FLAKY_WINDOW:
                 # Bağlantı dengesiz: her kopma için ayrı mesaj yerine yarım saatte en çok bir özet
                 kv_set("flaky_msg_at", now)
@@ -93,7 +98,8 @@ async def handle_beat(b: Beat) -> None:
     elif rebooted and prev_beat and b.uptime and b.uptime < RESET_UPTIME_SEC:
         # Pi yeniden başladı ama ağ (router) kesilmedi: evde elektrik var, Pi'nin beslemesi sarsılmış (adaptör/kablo/priz).
         # Elektrik kesintisi sayılmaz, bildirim gitmez; yalnızca /gecmis ve panelde "Pi resetlendi" olarak görünür.
-        stats.record_outage("reset", prev_beat, min(now, max(boot_time, prev_beat)))
+        stats.record_outage("reset", prev_beat, min(now, max(boot_time, prev_beat)), power.reset_note(b.info))
+        await power.after_reset(b.info, now)
     elif rebooted and prev_beat:
         # Alarm eşiğine varmadan biten kısa elektrik kesintisi (router da gitmiş: ilk nabız geç geldi)
         started = prev_beat
@@ -105,6 +111,7 @@ async def handle_beat(b: Beat) -> None:
     state.update(last_beat=now, boot_id=b.boot_id, device=b.device, down_since=None)
     if b.info:
         state["info"] = {**b.info, "uptime": b.uptime}
+        await power.check_info(b.info, b.boot_id, now)
     if b.live:
         for f in live_waiters:
             if not f.done():
@@ -198,6 +205,8 @@ def fmt_info(info: dict) -> str:
         lines.append(f"🌐 İnternet: var ({info['latency_ms']} ms)" if info["latency_ms"] is not None else "🌐 İnternet: YOK")
     if info.get("uptime") is not None:
         lines.append(f"⏱ Pi açık kalma süresi: {fmt_dur(info['uptime'])}")
+    if info.get("throttled") is not None:
+        lines.append(f"🔌 Güç: {power.power_text(info)}")
     if "temp" in info:
         lines.append(f"🌡 CPU: {info['temp']}°C · yük {info.get('load', '?')}")
     if "mem_mb" in info:

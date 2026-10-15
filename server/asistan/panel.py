@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from . import config, devices, home, members, speed, stats
+from . import config, devices, home, members, power, speed, stats
 from .db import db, kv_get
 
 router = APIRouter(prefix="/panel")
@@ -33,7 +33,7 @@ def auth(c: HTTPBasicCredentials | None = Depends(basic)) -> None:
 def data() -> dict:
     s = home.state
     with db() as con:
-        outs = [dict(r) for r in con.execute("SELECT kind, started, ended FROM outages ORDER BY id DESC LIMIT 30")]
+        outs = [dict(r) for r in con.execute("SELECT kind, started, ended, note FROM outages ORDER BY id DESC LIMIT 30")]
     stat = {}
     for d in (7, 30):
         st = stats.outage_stats(d)
@@ -46,6 +46,7 @@ def data() -> dict:
         "now": time.time(),
         "status": "down" if s["down_since"] is not None else ("up" if s["last_beat"] else "empty"),
         "last_beat": s["last_beat"], "down_since": s["down_since"], "info": s["info"],
+        "power": power.power_text(s["info"]),
         "timeout_sec": home.timeout_sec(), "members": members.count(),
         "since": float(kv_get("since") or 0) or None,
         "stats": stat, "daily": stats.daily_downtime(30), "outages": outs, "devices": devices.listing(),

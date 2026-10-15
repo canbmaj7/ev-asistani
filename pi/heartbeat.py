@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.request
 
-AGENT_VERSION = 3            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
+AGENT_VERSION = 4            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
 AGENT_STARTED = int(time.time())
 
 URL = os.environ["NOBETCI_URL"]          # örn. https://<alan-adı>/beat
@@ -55,6 +55,7 @@ SCAN_ENABLED = os.getenv("NOBETCI_SCAN", "1") == "1"
 
 net_events = []        # [{"dur": sn, "_end": monotonic}] — sunucuya henüz iletilmemiş kopmalar
 offline_since = None   # internet son kontrolde yoksa kopma başlangıcı (monotonic)
+offline_lan = None     # bu kopma boyunca yerel ağ geçidi (router) hep erişilebilir miydi? (True → sorun hatta/operatörde)
 last_latency = None    # son başarılı internet kontrolünün gecikmesi (ms)
 last_reconnect = 0.0
 server_fail_since = None
@@ -105,8 +106,24 @@ def internet_probe():
     return None
 
 
+def gateway_up() -> bool | None:
+    """Varsayılan ağ geçidine (router) ulaşılabiliyor mu? Bağlantı reddi de "ayakta" demektir. Geçit yoksa None."""
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "route", "show", "default"], capture_output=True, text=True, timeout=5).stdout.split()
+        gw = out[out.index("via") + 1]
+    except Exception:
+        return None
+    try:
+        socket.create_connection((gw, 80), timeout=1.5).close()
+        return True
+    except ConnectionRefusedError:
+        return True
+    except OSError:
+        return False
+
+
 def check_internet() -> None:
-    global offline_since, last_latency
+    global offline_since, offline_lan, last_latency
     now = time.monotonic()
     lat = internet_probe()
     if lat is not None:
@@ -114,10 +131,14 @@ def check_internet() -> None:
         if offline_since is not None:
             dur = now - offline_since
             if dur >= MIN_EVENT_SEC:
-                net_events.append({"dur": round(dur), "_end": now})
-            offline_since = None
-    elif offline_since is None:
-        offline_since = now
+                net_events.append({"dur": round(dur), "_end": now, "lan": offline_lan})
+            offline_since = offline_lan = None
+    else:
+        gw = gateway_up()
+        if offline_since is None:
+            offline_since, offline_lan = now, gw
+        elif offline_lan is not None:
+            offline_lan = offline_lan and gw is not False
 
 
 def default_iface():
@@ -343,6 +364,18 @@ def own_ip() -> str | None:
         return None
 
 
+def power_status() -> dict:
+    """vcgencmd'den güç bayrakları: get_throttled (düşük voltaj/kısılma) ve get_rsts (son reset sebebi)."""
+    out = {}
+    for key, cmd in (("throttled", "get_throttled"), ("rsts", "get_rsts")):
+        try:
+            text = subprocess.run(["vcgencmd", cmd], capture_output=True, text=True, timeout=3).stdout
+            out[key] = int(text.split("=")[1].strip(), 16)
+        except Exception:
+            pass
+    return out
+
+
 def collect_info(fresh: bool) -> dict:
     """Pi'nin anlık durumu. fresh=True ise interneti de yeniden ölçer."""
     global last_latency
@@ -365,6 +398,7 @@ def collect_info(fresh: bool) -> dict:
     except Exception:
         pass
     info["ssid"], info["ip"] = wifi_ssid(), own_ip()
+    info.update(power_status())
     info["agent"], info["agent_start"] = AGENT_VERSION, AGENT_STARTED
     try:  # /proc/net/wireless: iface: status link level noise ...
         lines = read("/proc/net/wireless").splitlines()[2:]
@@ -399,7 +433,7 @@ def beat(live: bool = False, speedtest: dict | None = None) -> None:
                 "boot_id": read("/proc/sys/kernel/random/boot_id"),
                 "uptime": float(read("/proc/uptime").split()[0]),
                 "net_events": [
-                    {"dur": e["dur"], "ago": round(now - e["_end"])} for e in pending
+                    {"dur": e["dur"], "ago": round(now - e["_end"]), "lan": e.get("lan")} for e in pending
                 ],
                 "live": live,
                 "info": collect_info(fresh=live),

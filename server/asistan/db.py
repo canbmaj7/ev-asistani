@@ -44,6 +44,8 @@ def init_db() -> None:
         cols = {r["name"] for r in con.execute("PRAGMA table_info(devices)")}
         if "net" not in cols:      # eski sürümden geçiş: cihazlar hangi Wi-Fi ağında görüldü
             con.execute("ALTER TABLE devices ADD COLUMN net TEXT NOT NULL DEFAULT ''")
+        if "note" not in {r["name"] for r in con.execute("PRAGMA table_info(outages)")}:
+            con.execute("ALTER TABLE outages ADD COLUMN note TEXT NOT NULL DEFAULT ''")   # örn. reset sebebi
 
 
 def kv_get(k: str):

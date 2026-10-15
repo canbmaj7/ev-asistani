@@ -151,6 +151,7 @@ function render(d){
     kv(p, '🌡 CPU', i.temp != null ? `${i.temp} °C · yük ${i.load ?? '?'}` : '—');
     kv(p, '💾 Boş RAM', i.mem_mb != null ? `${i.mem_mb} MB` : '—');
     kv(p, '📶 Wi-Fi', i.wifi_dbm != null ? `${i.wifi_dbm} dBm` + (i.ssid ? ` · ${i.ssid}` : '') : '—');
+    kv(p, '🔌 Güç', d.power || '—');
     kv(p, '🧩 Ajan sürümü', i.agent != null ? String(i.agent) : '—');
     kv(p, 'Alarm eşiği', `${d.timeout_sec/60} dk`);
     kv(p, 'Bildirim alan', `${d.members + 1} kişi`);
@@ -161,7 +162,7 @@ function render(d){
   table($('speeds'), ['Zaman', 'İndirme', 'Yükleme', 'Ping'],
     (d.speedtests || []).slice(0, 7).map(p => [fmtTime(p.at), `${(p.down_mbps || 0).toFixed(1)} Mbps`, `${(p.up_mbps || 0).toFixed(1)} Mbps`, `${Math.round(p.ping_ms || 0)} ms`]), '');
   table($('outages'), ['Tür', 'Başlangıç', 'Süre'],
-    d.outages.map(o => [({elektrik: '⚡ Elektrik', reset: '🔄 Pi resetlendi'})[o.kind] || '🌐 İnternet', fmtTime(o.started), fmtDur(o.ended - o.started)]), 'Kayıtlı kesinti yok 🎉');
+    d.outages.map(o => [(({elektrik: '⚡ Elektrik', reset: '🔄 Pi resetlendi'})[o.kind] || '🌐 İnternet') + (o.note ? ` (${o.note})` : ''), fmtTime(o.started), fmtDur(o.ended - o.started)]), 'Kayıtlı kesinti yok 🎉');
   table($('devices'), ['Cihaz', 'IP', 'Son görülme'],
     d.devices.map(v => { const c = el('span'); c.append(el('span', null, 'dot' + (v.online ? ' on' : '')), document.createTextNode(v.name || v.host || 'adsız'));
       return [c, v.ip || '?', v.online ? 'şimdi' : fmtTime(v.last_seen)]; }), 'Henüz tarama sonucu yok.');

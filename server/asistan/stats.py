@@ -10,9 +10,9 @@ from .util import fmt_dur, fmt_time
 ICONS = {"elektrik": "⚡", "internet": "🌐", "reset": "🔄"}   # reset: Pi yeniden başladı ama evde elektrik/internet vardı
 
 
-def record_outage(kind: str, started: float, ended: float) -> None:
+def record_outage(kind: str, started: float, ended: float, note: str = "") -> None:
     with db() as con:
-        con.execute("INSERT INTO outages (kind, started, ended) VALUES (?, ?, ?)", (kind, started, ended))
+        con.execute("INSERT INTO outages (kind, started, ended, note) VALUES (?, ?, ?, ?)", (kind, started, ended, note))
 
 
 def recent_count(kind: str, since: float) -> int:
@@ -66,11 +66,11 @@ def report_text(days_list=(7, 30)) -> str:
 
 def history_text() -> str:
     with db() as con:
-        rows = con.execute("SELECT kind, started, ended FROM outages ORDER BY id DESC LIMIT 10").fetchall()
+        rows = con.execute("SELECT kind, started, ended, note FROM outages ORDER BY id DESC LIMIT 10").fetchall()
     if not rows:
         return "Kayıtlı kesinti yok."
     return "Son kesintiler:\n" + "\n".join(
-        f"{ICONS.get(r['kind'], '🌐')} {fmt_time(r['started'])} — {fmt_dur(r['ended'] - r['started'])}"
+        f"{ICONS.get(r['kind'], '🌐')} {fmt_time(r['started'])} — {fmt_dur(r['ended'] - r['started'])}" + (f" · {r['note']}" if r["note"] else "")
         for r in rows)
 
 
@@ -80,7 +80,7 @@ def daily_downtime(days: int = 30) -> list[dict]:
     first = today - timedelta(days=days - 1)
     buckets = {(first + timedelta(days=i)).strftime("%d.%m"): 0.0 for i in range(days)}
     with db() as con:
-        rows = con.execute("SELECT started, ended FROM outages WHERE ended > ?", (first.timestamp(),)).fetchall()
+        rows = con.execute("SELECT started, ended FROM outages WHERE ended > ? AND kind != 'reset'", (first.timestamp(),)).fetchall()
     for r in rows:
         t = datetime.fromtimestamp(max(r["started"], first.timestamp()), config.TZ)
         end = datetime.fromtimestamp(r["ended"], config.TZ)
