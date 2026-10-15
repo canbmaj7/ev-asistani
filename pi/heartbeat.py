@@ -26,8 +26,9 @@ import time
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
-AGENT_VERSION = 5            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
+AGENT_VERSION = 6            # her sürümde scripts/release-agent.sh artırır ve dosyayı imzalar
 AGENT_STARTED = int(time.time())
 
 URL = os.environ["NOBETCI_URL"]          # örn. https://<alan-adı>/beat
@@ -244,21 +245,40 @@ def clean_router_name(name: str, hostname: str) -> str:
     return (name or (hostname or "")).strip()[:40]
 
 
-def router_names() -> dict[str, str]:
-    """Modem panelindeki cihaz adları: {mac: ad}. Ayar yoksa ya da erişilemezse boş döner."""
+def router_hosts() -> list[dict]:
+    """Modemin cihaz listesi: [{mac, ip, name, active}]. Ayar yoksa boş döner; erişilemezse istisna fırlatır."""
     if not (ROUTER_URL and ROUTER_USER and ROUTER_PASS):
-        return {}
+        return []
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     try:
         op.open(ROUTER_URL + "/auth", timeout=8)
-        return {}                                        # giriş istemiyorsa beklenmedik durum
+        return []                                        # giriş istemiyorsa beklenmedik durum
     except urllib.error.HTTPError as e:
         realm, challenge = e.headers.get("X-NDM-Realm", ""), e.headers.get("X-NDM-Challenge", "")
     md5 = hashlib.md5(f"{ROUTER_USER}:{realm}:{ROUTER_PASS}".encode()).hexdigest()
     body = json.dumps({"login": ROUTER_USER, "password": hashlib.sha256((challenge + md5).encode()).hexdigest()})
     op.open(urllib.request.Request(ROUTER_URL + "/auth", body.encode(), {"Content-Type": "application/json"}), timeout=8)
     hosts = json.load(op.open(ROUTER_URL + "/rci/show/ip/hotspot", timeout=8)).get("host", [])
-    return {h["mac"].lower(): n for h in hosts if h.get("mac") and (n := clean_router_name(h.get("name"), h.get("hostname")))}
+    return [{"mac": h["mac"].lower(), "ip": h.get("ip") or "", "active": bool(h.get("active")),
+             "name": clean_router_name(h.get("name"), h.get("hostname"))} for h in hosts if h.get("mac")]
+
+
+def merge_router(devices: list[dict], hosts: list[dict], router_ip: str = "") -> list[dict]:
+    """ARP listesini modem listesiyle birleştirir: adları ekler, modemi 'Modem' diye adlandırır ve
+    repeater arkasında ARP'de görünmeyen aktif cihazları (via=router) ekler. MAC başına tek kayıt."""
+    names = {h["mac"]: h["name"] for h in hosts if h["name"]}
+    out, seen = [], set()
+    for d in devices:
+        if d["mac"] in seen:                             # repeater arkasındakiler onun MAC'iyle görünür
+            continue
+        seen.add(d["mac"])
+        d["host"] = "Modem" if router_ip and d["ip"] == router_ip else names.get(d["mac"]) or d["host"]
+        out.append(d)
+    for h in hosts:
+        if h["active"] and h["ip"] not in ("", "0.0.0.0") and h["mac"] not in seen:
+            seen.add(h["mac"])
+            out.append({"ip": h["ip"], "mac": h["mac"], "host": h["name"], "via": "router"})
+    return out
 
 
 def scan_network():
@@ -290,13 +310,15 @@ def scan_network():
                     hostnames[ip] = fut.result(timeout=4)
                 except Exception:
                     hostnames[ip] = ""
-    try:
-        names = router_names()
-    except Exception as e:
-        names = {}
-        log(f"modem adları alınamadı: {type(e).__name__}")
     for d in devices:
-        d["host"] = names.get(d["mac"]) or hostnames.get(d["ip"], "")
+        d["host"] = hostnames.get(d["ip"], "")
+    try:
+        hosts = router_hosts()
+    except Exception as e:
+        hosts = []
+        log(f"modem adları alınamadı: {type(e).__name__}")
+    if hosts:
+        devices = merge_router(devices, hosts, urlparse(ROUTER_URL).hostname or "")
     return devices
 
 

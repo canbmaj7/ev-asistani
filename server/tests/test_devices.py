@@ -65,3 +65,24 @@ def test_migration_adds_net_column(tmp_path, monkeypatch):
     with db.db() as c:
         row = c.execute("SELECT name, net FROM devices").fetchone()
     assert (row["name"], row["net"]) == ("TV", "")                          # eski veri korunur
+
+
+def test_router_listed_devices_join_silently_once(outbox):
+    scan("aa:bb:cc:00:00:01")
+    outbox.clear()
+    run(devices.handle_scan([{"mac": "aa:bb:cc:00:00:01", "ip": "1.1.1.1", "host": ""},
+                             {"mac": "7c:21:4a:00:00:04", "ip": "1.1.1.2", "host": "Can", "via": "router"}], time.time()))
+    assert not outbox                                           # ilk modem listesi: bildirim yok
+    assert any(d["name"] or d["host"] == "Can" for d in devices.listing())
+    run(devices.handle_scan([{"mac": "aa:bb:cc:00:00:01", "ip": "1.1.1.1", "host": ""},
+                             {"mac": "7c:21:4a:00:00:09", "ip": "1.1.1.3", "host": "Yeni", "via": "router"}], time.time()))
+    assert len(outbox) == 1 and "yeni bir cihaz" in outbox[0][1]  # sonraki yeni cihaz bildirilir
+
+
+def test_old_devices_hidden_in_text(outbox):
+    from asistan.db import db
+    scan("aa:bb:cc:00:00:01")
+    with db() as con:
+        con.execute("INSERT INTO devices (mac, ip, host, first_seen, last_seen, net) VALUES ('de:ad:00:00:00:01', '', '', 1, 1, '')")
+    text = devices.text()
+    assert "1 eski kayıt gizlendi" in text and "1 çevrimiçi / 1 kayıtlı" in text
