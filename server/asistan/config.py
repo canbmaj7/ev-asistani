@@ -21,7 +21,7 @@ WAIT_SEC = 25                                         # Pi'nin uzun bekleme (lon
 ONLINE_SEC = 900                                      # cihaz bu süre içinde görüldüyse "çevrimiçi"
 
 # Sabah özeti
-SEND_AT = os.getenv("SEND_AT", "08:00")
+SEND_AT = os.getenv("SEND_AT", "06:00")
 SUMMARY_CATCHUP_H = 2                                 # geç açılışta en fazla bu kadar saat telafi
 CITY = os.getenv("CITY", "Gebze")
 LAT = float(os.getenv("LAT", "40.8028"))

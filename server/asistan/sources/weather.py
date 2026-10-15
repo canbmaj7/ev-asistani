@@ -29,11 +29,9 @@ async def section(c: httpx.AsyncClient) -> str:
     cur, day = d["current"], {k: v[0] for k, v in d["daily"].items()}
     emoji, text = WMO.get(day["weather_code"], ("🌡", "Bilinmiyor"))
     lines = [
-        f"{emoji} Hava · {config.CITY}",
-        f"{text}, şimdi {round(cur['temperature_2m'])}° (hissedilen {round(cur['apparent_temperature'])}°)",
-        f"En yüksek {round(day['temperature_2m_max'])}° / en düşük {round(day['temperature_2m_min'])}°"
-        f" · yağış %{day['precipitation_probability_max']} · rüzgâr {round(day['wind_speed_10m_max'])} km/sa",
-        f"🌅 {day['sunrise'][-5:]} · 🌇 {day['sunset'][-5:]}",
+        f"{emoji} Hava · {config.CITY}: {text}, şimdi {round(cur['temperature_2m'])}°"
+        f" · {round(day['temperature_2m_min'])}°–{round(day['temperature_2m_max'])}°"
+        f" · yağış %{day['precipitation_probability_max']}",
     ]
     if (day["precipitation_probability_max"] or 0) >= 50:
         lines.append("☔ Şemsiyeni al.")

@@ -21,11 +21,11 @@ async def section(c: httpx.AsyncClient, state: dict) -> str:
         hist["prev"] = hist.get("values", {})
         hist["tarih"], hist["values"] = tarih, now
     prev = hist.get("prev", {})
-    lines = [f"💱 Kur (TCMB, {tarih[:5]})"]
+    parts = []
     for kod, val in now.items():
-        line = f"{kod} {tr_num(val)} ₺"
+        part = f"{kod} {tr_num(val)}"
         if prev.get(kod):
-            ch = (val - prev[kod]) / prev[kod] * 100
-            line += f" ({'▲' if ch > 0 else '▼' if ch < 0 else '='} %{tr_num(abs(ch))})"
-        lines.append(line)
-    return "\n".join(lines)
+            ch = val - prev[kod]
+            part += " ▲" if ch > 0 else " ▼" if ch < 0 else ""
+        parts.append(part)
+    return "💱 " + " · ".join(parts)

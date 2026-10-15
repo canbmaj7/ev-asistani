@@ -29,7 +29,7 @@ def test_invite_flow(outbox):
 
 
 def test_member_cannot_use_owner_commands(outbox, member):
-    for cmd in ("/davet", "/esik 3", "/cihazlar", "/uyeler"):
+    for cmd in ("/davet", "/esik 3", "/cihazlar", "/uyeler", "/duyuru selam"):
         outbox.clear()
         say(member, cmd)
         assert not outbox, cmd
@@ -82,3 +82,17 @@ def test_menus():
     member = {c["command"] for c in commands.MEMBER_MENU}
     assert {"davet", "esik", "cihazlar"} <= owner and not {"davet", "esik"} & member
     assert {"durum", "ozet", "deprem", "takvim"} <= owner & member
+
+
+def test_owner_announcement_reaches_everyone(outbox, member):
+    say(OWNER, "/duyuru")
+    assert "Kullanım" in outbox.last()
+    say(OWNER, "/duyuru Yarın internet bakımı var")
+    for chat in (OWNER, member):
+        assert any("📢 Duyuru" in t and "internet bakımı" in t for t in outbox.texts(chat))
+    assert "2 kişiye" in outbox.last()
+
+
+def test_member_announcement_blocked(outbox, member):
+    say(member, "/duyuru Sahte duyuru")
+    assert not any("Sahte duyuru" in t for t in outbox.texts(OWNER))

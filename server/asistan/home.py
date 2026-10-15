@@ -235,26 +235,13 @@ async def live_status() -> str:
 
 
 def summary_section() -> str:
-    """Sabah özetindeki 🏠 Ev bölümü."""
-    lines = ["🏠 Ev"]
+    """Sabah özetindeki 🏠 Ev satırı: sorun yoksa tek satır."""
     if not state["last_beat"]:
-        lines.append("Pi'den henüz sinyal yok.")
-    elif state["down_since"] is not None:
-        lines.append(f"🔴 Pi'ye ulaşılamıyor ({fmt_time(state['down_since'])[:16]}'den beri)")
-    else:
-        info = state["info"]
-        bits = ["🟢 Pi çevrimiçi"]
-        if info.get("wifi_dbm") is not None:
-            bits.append(f"Wi-Fi {info['wifi_dbm']} dBm")
-        if info.get("temp") is not None:
-            bits.append(f"{info['temp']}°C")
-        lines.append(" · ".join(bits))
-    if line := speed.summary_line():
-        lines.append(line)
+        return "🏠 Ev: Pi'den henüz sinyal yok."
+    if state["down_since"] is not None:
+        return f"🏠 Ev: 🔴 Pi'ye ulaşılamıyor ({fmt_time(state['down_since'])[:16]}'den beri)"
     st = stats.outage_stats(1)
     if st["kinds"]:
-        lines.append("Son 24 saat kesinti: " + ", ".join(
-            f"{stats.ICONS.get(k, '🌐')} {v['n']} ({fmt_dur(v['sec'])})" for k, v in st["kinds"].items()))
-    else:
-        lines.append("Son 24 saatte kesinti yok.")
-    return "\n".join(lines)
+        return "🏠 Ev: son 24 saat kesinti: " + ", ".join(
+            f"{stats.ICONS.get(k, '🌐')} {v['n']} ({fmt_dur(v['sec'])})" for k, v in st["kinds"].items())
+    return "🏠 Ev: her şey yolunda 🟢"

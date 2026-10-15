@@ -16,7 +16,7 @@ HTTPS için bir alan adı gerekir (kendi alan adın ya da ücretsiz `nobetci.<SU
 
 Coolify kullanıyorsan: *New Resource → Public Repository*, build pack **Dockerfile**, base directory `/server`, port `8000`, alan adını Domains'e yaz; ortam değişkenlerini Coolify'a gir ve `/data` için kalıcı depolama ekle.
 
-Sabah özeti için `SEND_AT` (08:00), `CITY`/`LAT`/`LON`, `WATCH_URLS` (virgülle ayrılmış site adresleri) tanımlanır. Deprem eşiği `QUAKE_MIN_MAG` (4.0). Takvim sunucuda ayarlanmaz: her kişi botta `/takvim` ile kendi linkini bağlar.
+Sabah özeti için `SEND_AT` (06:00), `CITY`/`LAT`/`LON`, `WATCH_URLS` (virgülle ayrılmış site adresleri) tanımlanır. Deprem eşiği `QUAKE_MIN_MAG` (4.0). Takvim sunucuda ayarlanmaz: her kişi botta `/takvim` ile kendi linkini bağlar.
 
 Planlı kesinti uyarıları için (SEDAŞ her 30 dk, İSU her 10 dk okunur; `SEDAS_POLL_SEC`/`ISU_POLL_SEC`) `DISTRICT` (SEDAŞ ilçe adı, ör. `GEBZE`) ve `NEIGHBORHOOD` (mahalle adı) tanımla. Ezan vakitleri için `PRAYER_DISTRICT_ID` (ezanvakti.emushaf.net ilçe kodu), nöbetçi eczane için `PHARMACY_URL`.
 

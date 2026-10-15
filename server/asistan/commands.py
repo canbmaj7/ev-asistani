@@ -22,6 +22,7 @@ HELP_OWNER = _COMMON + (
     "/esik [dk] – alarm eşiği (şimdi/değiştir)\n/bakim [dk] – kesinti mesajlarını sustur\n"
     "/pi-guncelle – Pi ajanını en son imzalı sürüme güncelle\n"
     "/cihazlar – ağdaki cihazlar\n/cihaz SON4 isim – cihaza isim ver\n"
+    "/duyuru METİN – tüm üyelere duyuru gönder\n"
     "/davet – yeni üye için kod üret\n/uyeler – üyeleri listele\n/cikar ID – üyeyi çıkar\n"
 ) + _AUTO
 WELCOME = (
@@ -52,6 +53,7 @@ OWNER_MENU = [c for c in MEMBER_MENU if c["command"] not in ("katil", "ayril")] 
     {"command": "pi_guncelle", "description": "Pi ajanını en son imzalı sürüme güncelle"},
     {"command": "cihazlar", "description": "Ağdaki cihazlar"},
     {"command": "cihaz", "description": "Cihaza isim ver: /cihaz SON4 isim"},
+    {"command": "duyuru", "description": "Tüm üyelere duyuru gönder: /duyuru metin"},
     {"command": "davet", "description": "Yeni üye için davet kodu üret"},
     {"command": "uyeler", "description": "Üyeleri listele"},
     {"command": "cikar", "description": "Üyeyi çıkar: /cikar ID"},
@@ -108,6 +110,18 @@ async def _threshold(chat_id: int, arg: str) -> None:
         return
     kv_set("timeout_sec", int(minutes * 60))
     await tg.send(f"✅ Alarm eşiği {minutes:g} dakika yapıldı.", to=[chat_id])
+
+
+async def _announce(chat_id: int, arg: str) -> None:
+    if not arg:
+        await tg.send("Kullanım: /duyuru MESAJ  (herkese gider, sahibe de kopya düşer)", to=[chat_id])
+        return
+    if len(arg) > 3500:
+        await tg.send("Duyuru çok uzun (en fazla 3500 karakter).", to=[chat_id])
+        return
+    targets = members.recipients()
+    await tg.send(f"📢 Duyuru\n\n{arg}", to=targets)
+    await tg.send(f"✅ Duyuru {len(targets)} kişiye gönderildi.", to=[chat_id])
 
 
 async def handle(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
@@ -168,6 +182,8 @@ async def handle(chat_id: int, msg: dict, cmd: str, arg: str) -> None:
         await tg.send(devices.text(), to=[chat_id])
     elif cmd == "/cihaz":
         await tg.send(devices.rename(arg), to=[chat_id])
+    elif cmd == "/duyuru":
+        await _announce(chat_id, arg)
     elif cmd == "/davet":
         await tg.send(
             "Katılacak kişiye şunu ilet:\n1) Telegram'da @evnobetcisi_bot'u aç\n"
@@ -197,7 +213,7 @@ async def loop() -> None:
                 if chat.get("type") != "private":
                     continue
                 if text.startswith("/"):
-                    head, _, arg = text.partition(" ")
+                    head, arg = (text.split(None, 1) + [""])[:2]       # satır sonu da ayırıcı (çok satırlı duyuru)
                     await handle(chat["id"], msg, head.split("@")[0].lower(), arg)
                 elif calendars.expects_link(chat["id"], text) and members.is_member(chat["id"]):
                     spawn(calendars.save(chat["id"], text, msg.get("message_id")))

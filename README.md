@@ -37,6 +37,7 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 | `/rapor [gün]` | Kesinti sayısı, toplam süre, en uzun kesinti, erişilebilirlik (varsayılan 7 ve 30 gün) | herkes |
 | `/esik [dk]` | Alarm eşiğini göster/değiştir (2-60 dk) | sahip |
 | `/cihazlar`, `/cihaz SON4 isim` | Ağdaki cihazlar, isim verme | sahip |
+| `/duyuru METİN` | Tüm üyelere duyuru gönderir | sahip |
 | `/davet`, `/uyeler`, `/cikar ID` | Üye yönetimi (tek kullanımlık, 10 dk geçerli davet kodu) | sahip |
 | `/katil KOD`, `/ayril` | Bildirimlere katıl/çık | üye |
 
@@ -51,7 +52,7 @@ Raspberry Pi ──(nabız, ağ taraması)──▶ sunucu (Docker) ──▶ Te
 - `/durum` için Pi, sunucuya uzun bekleme (`POST /wait`) bağlantısı açık tutar; modemde port açmak gerekmez.
 
 ### Sabah özeti
-Her gün `SEND_AT` (varsayılan 08:00) saatinde **herkese kendi sürümü** gider: sahip ve üyeler aynı hava/kur/deprem/ev bilgisini alır, takvim kişiye özeldir, sunucu bölümü yalnızca sahibe gider.
+Her gün `SEND_AT` (varsayılan 06:00) saatinde **herkese kendi sürümü** gider: kısa tutulur: hava, kur, (bağlıysa) takvim, ev durumu; planlı kesinti, kötü hava kalitesi ve sunucu sorunu yalnızca varsa yazılır. Deprem zaten anında bildirilir, ezan için `/ezan` var. Takvim kişiye özeldir, sunucu satırı yalnızca sahibe gider.
 
 | Bölüm | Kaynak |
 |---|---|

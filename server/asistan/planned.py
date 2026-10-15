@@ -173,6 +173,16 @@ def cached() -> list[dict]:
     return out
 
 
+def summary_alert(items: list[dict] | None = None) -> str:
+    """Sabah özeti için: yalnızca mahallemi etkileyen bugün/yarın elektrik ve su kesintileri (yoksa boş)."""
+    items = cached() if items is None else items
+    today = datetime.now(config.TZ).date()
+    lines = [f"⚠️ {config.NEIGHBORHOOD}: elektrik {day_label(o['day'], today)} {o['start']}–{o['end']}"
+             for o in items if o["kind"] == "elektrik" and today <= o["day"] < today + timedelta(days=2) and affects_me(o)]
+    lines += [f"💧 {o['title'][:120]}" for o in items if o["kind"] == "su" and affects_me(o)]
+    return "\n".join(lines)
+
+
 def section(items: list[dict] | None = None, days: int = 2) -> str:
     """Özet ve /kesinti için: bugün (+yarın) ilçedeki planlı kesintiler; mahallemi etkileyenler başta."""
     items = cached() if items is None else items

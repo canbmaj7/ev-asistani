@@ -15,10 +15,10 @@ D = lambda h, m: datetime(2026, 10, 13, h, m, tzinfo=config.TZ)  # noqa: E731
 
 
 def test_due():
-    assert not summary.due(D(7, 59), None)
-    assert summary.due(D(8, 0), None)
-    assert not summary.due(D(8, 30), "2026-10-13")
-    assert summary.due(D(9, 30), "2026-10-12")          # geç açılış telafisi
+    assert not summary.due(D(5, 59), None)
+    assert summary.due(D(6, 0), None)
+    assert not summary.due(D(6, 30), "2026-10-13")
+    assert summary.due(D(7, 30), "2026-10-12")          # geç açılış telafisi
     assert not summary.due(D(15, 0), None)              # öğleden sonra sabah özeti gelmesin
 
 
@@ -36,20 +36,19 @@ def fake_sources(monkeypatch):
     monkeypatch.setattr(cal_src, "section", cal)
 
     async def aq(c): return "🌫 Hava kalitesi: İyi"
-    async def ezan(): return "🕌 İmsak 05:40"
     monkeypatch.setattr(weather, "air_quality", aq)
-    monkeypatch.setattr(summary.prayer, "today_line", ezan)
 
 
 def test_personal_summaries(fake_sources, member):
     with db() as con:
         con.execute("INSERT INTO calendars VALUES (?, ?, 0)", (member, "https://x/a.ics"))
     owner, mem = run(summary.build(OWNER)), run(summary.build(member))
-    assert "🖥 Sunucu" in owner and "📅" not in owner          # sahip takvim bağlamadı
+    assert "🖥 Sunucu: her şey yolunda" in owner and "📅" not in owner          # sahip takvim bağlamadı
     assert "📅 Bugün" in mem and "🖥 Sunucu" not in mem
     for text in (owner, mem):
-        assert "Günaydın" in text and "⛅ Hava" in text and "🌍 Deprem" in text and "🏠 Ev" in text
-        assert "🌫 Hava kalitesi" in text and "🕌 İmsak" in text and "🔌 Planlı kesintiler" in text and "Kaynaklar" in text
+        assert "Günaydın" in text and "⛅ Hava" in text and "💱 Kur" in text and "🏠 Ev" in text
+        assert "Deprem" not in text and "Kaynaklar" not in text and "İmsak" not in text   # özet kısa kalır
+        assert "Hava kalitesi" not in text                  # iyi hava yazılmaz
     assert kv_json("ozet_state", {})["rates"]                 # kur geçmişi kaydedildi
 
 

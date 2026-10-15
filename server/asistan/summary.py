@@ -3,17 +3,16 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 
-from . import calendars, config, home, members, planned, prayer
+from . import calendars, config, home, members, planned
 from . import telegram as tg
 from .db import kv_get, kv_json, kv_set
 from .sources import calendar as cal_src
-from .sources import quakes, rates, server, weather
+from .sources import rates, server, weather
 from .sources.common import client, tr_date
 from .util import log
 
-LABELS = {"hava": "🌤 Hava", "kalite": "🌫 Hava kalitesi", "ezan": "🕌 Ezan vakitleri", "kur": "💱 Kur",
-          "takvim": "📅 Takvim", "deprem": "🌍 Deprem", "sunucu": "🖥 Sunucu"}
-SOURCES = "🔗 Kaynaklar: Open-Meteo · TCMB · Diyanet · AFAD · SEDAŞ · İSU"
+LABELS = {"hava": "🌤 Hava", "kalite": "🌫 Hava kalitesi", "kur": "💱 Kur", "takvim": "📅 Takvim", "sunucu": "🖥 Sunucu"}
+BAD_AIR = ("🟠", "🔴", "🟣")                      # hava kalitesi yalnızca kötüyse yazılır
 
 
 async def build(chat_id: int) -> str:
@@ -25,10 +24,8 @@ async def build(chat_id: int) -> str:
         jobs = {
             "hava": weather.section(c),
             "kalite": weather.air_quality(c),
-            "ezan": prayer.today_line(),
             "kur": rates.section(c, st),
             "takvim": cal_src.section(c, cal_url, now) if cal_url else None,
-            "deprem": quakes.fetch(c),
             "sunucu": server.section(c, config.WATCH_URLS) if members.is_owner(chat_id) else None,
         }
         names = [k for k, v in jobs.items() if v is not None]
@@ -41,11 +38,15 @@ async def build(chat_id: int) -> str:
         res = results[name]
         if isinstance(res, Exception):
             return f"{LABELS[name]}: alınamadı ({type(res).__name__})"
-        return quakes.section(res) if name == "deprem" else res
+        if name == "kalite" and not any(b in res for b in BAD_AIR):
+            return None
+        if name == "sunucu" and "❌" not in res and "⚠️" not in res:
+            return "🖥 Sunucu: her şey yolunda ✅"       # sorun varsa ayrıntı gösterilir
+        return res
 
     weather_block = "\n".join(p for p in (part("hava"), part("kalite")) if p)
-    parts = [f"☀️ Günaydın! {tr_date(now)}", weather_block, part("ezan"), part("kur"), part("takvim"),
-             planned.section(), part("deprem"), home.summary_section(), part("sunucu"), SOURCES]
+    parts = [f"☀️ Günaydın! {tr_date(now)}", weather_block, part("kur"), part("takvim"),
+             planned.summary_alert(), home.summary_section(), part("sunucu")]
     return "\n\n".join(p for p in parts if p)
 
 
