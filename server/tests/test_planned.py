@@ -124,12 +124,16 @@ def test_only_sedas_and_isu_are_contacted():
     assert not re.findall(r"https?://", planned_code)                   # planned.py kendi başına siteye gitmez
 
 
-def test_section():
-    items = [el(1, TODAY, "ÖRNEK KÖY"), el(2, TODAY, "YENİKENT"), el(3, TODAY + timedelta(days=5), "ULUS")]
+def test_section_shows_only_my_neighborhood():
+    su = {"id": "isu-1", "kind": "su", "title": "Gebze Örnek Köy Mahallesi'nde su kesintisi", "url": outages.ISU_PAGE}
+    items = [el(1, TODAY, "ÖRNEK KÖY"), el(2, TODAY, "YENİKENT"), el(3, TODAY + timedelta(days=5), "ULUS"), su]
     text = planned.section(items)
-    assert "⚠️ Örnek Köy: Bugün 09:00–17:00" in text and "YENİKENT" in text and "ULUS" not in text
-    assert "etkilenmiyor" in planned.section([el(2, TODAY, "YENİKENT")])
+    assert "— ⚡ Elektrik: Bugün 09:00–17:00" in text and "— 💧 Su: Gebze Örnek Köy" in text
+    assert "YENİKENT" not in text and "ULUS" not in text
+    assert "planlı kesinti yok" in planned.section([el(2, TODAY, "YENİKENT")])
     assert "planlı kesinti yok" in planned.section([])
+    assert planned.summary_alert([el(2, TODAY, "YENİKENT")]) == ""          # özet: yoksa hiç yazılmaz
+    assert planned.summary_alert(items).startswith("🔌 Planlı kesinti · Örnek Köy\n— ⚡ Elektrik: Bugün")
 
 
 # İSU ana sayfasındaki gerçek bölümün yapısı (boş hali, siteden alındığı gibi)
@@ -194,7 +198,7 @@ def test_fetch_all_keeps_only_relevant_water_cuts(monkeypatch):
     monkeypatch.setattr(outages, "isu", fake_isu)
     items = run(planned.fetch_all())
     assert [o["id"] for o in items] == ["isu-2"]
-    assert "Hacıhalil" in planned.section(items) and "Yahyakaptan" not in planned.section(items)
+    assert "Yahyakaptan" not in planned.section(items)
 
 
 def test_one_source_failing_does_not_break_the_other(monkeypatch):

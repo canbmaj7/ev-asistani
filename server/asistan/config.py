@@ -21,7 +21,7 @@ WAIT_SEC = 25                                         # Pi'nin uzun bekleme (lon
 ONLINE_SEC = 900                                      # cihaz bu süre içinde görüldüyse "çevrimiçi"
 
 # Sabah özeti
-SEND_AT = os.getenv("SEND_AT", "06:00")
+SEND_AT = "06:00"                                     # sabit (ortam değişkeniyle değişmez)
 SUMMARY_CATCHUP_H = 2                                 # geç açılışta en fazla bu kadar saat telafi
 CITY = os.getenv("CITY", "Gebze")
 LAT = float(os.getenv("LAT", "40.8028"))
@@ -35,7 +35,7 @@ QUAKE_POLL_SEC = int(os.getenv("QUAKE_POLL_SEC", "60"))
 
 # Planlı kesintiler (SEDAŞ elektrik, İSU su)
 DISTRICT = os.getenv("DISTRICT", "GEBZE")                    # SEDAŞ ilçe adı
-NEIGHBORHOOD = os.getenv("NEIGHBORHOOD", "")                 # anında uyarı yalnızca bu mahalle için (boşsa uyarı yok)
+NEIGHBORHOOD = "Adem Yavuz"                                  # planlı kesinti uyarıları ve özet yalnızca bu mahalle için
 # Kaynak sitelere ne sıklıkla istek atılır (kaynak başına tek istek; hata olursa aralık ikiye katlanır, en çok 1 saat)
 SEDAS_POLL_SEC = int(os.getenv("SEDAS_POLL_SEC", "1800"))    # SEDAŞ planlı kesintileri günler önceden duyurur
 ISU_POLL_SEC = int(os.getenv("ISU_POLL_SEC", "600"))         # İSU arıza kesintileri aniden çıkabilir

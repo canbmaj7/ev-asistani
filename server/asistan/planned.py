@@ -173,40 +173,28 @@ def cached() -> list[dict]:
     return out
 
 
+def my_lines(items: list[dict], days: int, today: date) -> list[str]:
+    """Yalnızca mahallemi etkileyen kesintiler; elektrik ve su ayrı satırda: '— ⚡ Elektrik: …' / '— 💧 Su: …'."""
+    lines = [f"— ⚡ Elektrik: {day_label(o['day'], today)} {o['start']}–{o['end']}"
+             for o in items if o["kind"] == "elektrik" and today <= o["day"] < today + timedelta(days=days) and affects_me(o)]
+    return lines + [f"— 💧 Su: {o['title'][:160]}" for o in items if o["kind"] == "su" and affects_me(o)]
+
+
 def summary_alert(items: list[dict] | None = None) -> str:
-    """Sabah özeti için: yalnızca mahallemi etkileyen bugün/yarın elektrik ve su kesintileri (yoksa boş)."""
+    """Sabah özeti için: mahallemi etkileyen bugün/yarın kesintiler (yoksa boş: özet kısa kalır)."""
     items = cached() if items is None else items
-    today = datetime.now(config.TZ).date()
-    lines = [f"⚠️ {config.NEIGHBORHOOD}: elektrik {day_label(o['day'], today)} {o['start']}–{o['end']}"
-             for o in items if o["kind"] == "elektrik" and today <= o["day"] < today + timedelta(days=2) and affects_me(o)]
-    lines += [f"💧 {o['title'][:120]}" for o in items if o["kind"] == "su" and affects_me(o)]
-    return "\n".join(lines)
+    lines = my_lines(items, 2, datetime.now(config.TZ).date())
+    return f"🔌 Planlı kesinti · {config.NEIGHBORHOOD}\n" + "\n".join(lines) if lines else ""
 
 
 def section(items: list[dict] | None = None, days: int = 2) -> str:
-    """Özet ve /kesinti için: bugün (+yarın) ilçedeki planlı kesintiler; mahallemi etkileyenler başta."""
+    """/kesinti için: yalnızca mahallemin önümüzdeki `days` gündeki planlı elektrik ve su kesintileri."""
     items = cached() if items is None else items
-    today = datetime.now(config.TZ).date()
-    el = [o for o in items if o["kind"] == "elektrik" and today <= o["day"] < today + timedelta(days=days)]
-    su = [o for o in items if o["kind"] == "su"]
-    title = f"🔌 Planlı kesintiler · {config.DISTRICT.title()}"
-    if not el and not su:
-        return f"{title}\n{'Bugün ve yarın' if days == 2 else 'Yakın tarihte'} planlı kesinti yok."
-    mine = [o for o in el if affects_me(o)]
-    lines = [title]
-    for o in mine:
-        lines.append(f"⚠️ {config.NEIGHBORHOOD}: {day_label(o['day'], today)} {o['start']}–{o['end']}")
-    others = [o for o in el if o not in mine]
-    limit = 4 if days == 2 else 15          # özet kısa kalsın; tamamı /kesinti'de
-    for o in others[:limit]:
-        lines.append(f"⚡ {day_label(o['day'], today)} {o['start']}–{o['end']} · {tidy_names(o['areas'])[:70]}")
-    if len(others) > limit:
-        lines.append(f"… ve {len(others) - limit} kesinti daha (/kesinti)")
-    for o in su[:4]:
-        lines.append(f"💧 {('⚠️ ' if affects_me(o) else '')}{o['title'][:160]}")
-    if not mine and config.NEIGHBORHOOD:
-        lines.append(f"✅ {config.NEIGHBORHOOD} etkilenmiyor.")
-    return "\n".join(lines)
+    lines = my_lines(items, days, datetime.now(config.TZ).date())
+    title = f"🔌 Planlı kesintiler · {config.DISTRICT.title()}, {config.NEIGHBORHOOD}"
+    if not lines:
+        return f"{title}\n— ✅ Elektrik ve su: planlı kesinti yok"
+    return title + "\n" + "\n".join(lines)
 
 
 async def reply(chat_id: int) -> None:
